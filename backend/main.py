@@ -1388,6 +1388,105 @@ def anki_refresh_existing(body: AnkiRefresh):
     }
 
 
+# ---------- Sentence mining ----------
+
+def _default_mine_deck() -> str:
+    """Pick a target deck when the caller doesn't specify one — the first real
+    deck, falling back to Anki's 'Default'."""
+    try:
+        decks = anki.get_deck_names()
+    except Exception:
+        decks = []
+    for d in decks:
+        if d != "Default":
+            return d
+    return decks[0] if decks else "Default"
+
+
+def _make_cloze(sentence: str, word: str, pinyin: str) -> str | None:
+    """Wrap the first occurrence of `word` in the sentence as an Anki cloze,
+    using the pinyin as the hint: {{c1::word::pinyin}}."""
+    idx = sentence.find(word)
+    if idx < 0:
+        return None
+    hint = f"::{pinyin}" if pinyin else ""
+    return f"{sentence[:idx]}{{{{c1::{word}{hint}}}}}{sentence[idx + len(word):]}"
+
+
+class MineRequest(BaseModel):
+    text_id: int | None = None
+    word: str
+    sentence: str | None = None
+    deck_name: str = ""
+    include_audio: bool = True
+
+
+@app.post("/api/anki/mine")
+def mine_sentence(body: MineRequest):
+    """Create a cloze Anki card from the sentence a word appears in. The reader
+    sends the exact sentence it's showing; otherwise we fall back to an example
+    sentence pulled from the user's texts."""
+    if not anki.is_available():
+        raise HTTPException(503, "AnkiConnect not reachable. Open Anki desktop with the AnkiConnect add-on to mine cards.")
+    word = to_simplified(body.word.strip())
+    if not word:
+        raise HTTPException(400, "word is required")
+
+    with db() as conn:
+        pinyin, definition, _ = _effective_entry(conn, word)
+        sentence = (body.sentence or "").strip()
+        title = None
+        if not sentence or word not in sentence:
+            sentence, title = _word_context(conn, word)  # returns word bolded
+            if sentence:
+                sentence = sentence.replace("<b>", "").replace("</b>", "")
+        elif body.text_id is not None:
+            row = conn.execute("SELECT title FROM texts WHERE id = ?", (body.text_id,)).fetchone()
+            title = row["title"] if row else None
+
+    if not sentence:
+        raise HTTPException(404, "Couldn't find a sentence containing that word.")
+
+    cloze = _make_cloze(sentence, word, pinyin)
+    if not cloze:
+        raise HTTPException(400, "The word isn't present in the sentence.")
+
+    audio_tag = None
+    if body.include_audio:
+        try:
+            fname = tts.media_filename(sentence)
+            anki.store_media(fname, tts.synth_mp3(sentence))
+            audio_tag = f"[sound:{fname}]"
+        except Exception:
+            audio_tag = None
+
+    extra = f"<b>{word}</b> {pinyin}".strip()
+    if definition:
+        extra += f"<br>{definition.replace(chr(10), '<br>')}"
+
+    tags = [f"added:{datetime.now().strftime('%Y-%m')}"]
+    if title:
+        src = _slug_tag("src", title)
+        if src:
+            tags.append(src)
+
+    deck = body.deck_name or _default_mine_deck()
+    try:
+        note_id = anki.add_cloze_note(deck, cloze, extra, audio_tag, tags)
+    except anki.AnkiConnectError as e:
+        msg = str(e)
+        if "duplicate" in msg.lower():
+            raise HTTPException(409, "You've already mined this sentence.")
+        raise HTTPException(502, f"Anki error: {msg}")
+
+    return {
+        "ok": True,
+        "deck": deck,
+        "note_id": note_id,
+        "message": f"Mined into “{deck}” ✓ — sync from the dashboard to send it to your phone.",
+    }
+
+
 # ---------- Frontend static files ----------
 
 app.mount("/static", StaticFiles(directory=FRONTEND_DIR / "static"), name="static")

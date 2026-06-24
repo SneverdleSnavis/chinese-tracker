@@ -174,6 +174,23 @@ Coverage and HSK progress are complementary: coverage measures comprehension of
 **your own corpus**, while HSK progress measures a **curriculum** independent of
 what you've read. Endpoints: `GET /api/hsk/progress`, `GET /api/hsk/missing?band=`.
 
+## Sentence mining → Anki
+
+In the reader, selecting a word reveals **✚ Mine sentence → Anki** in the lookup
+panel. It builds an Anki **cloze** card from the exact sentence the word is in:
+- For subtitles the sentence is the line; for articles it's the run of text
+  around the word bounded by sentence punctuation (`。！？；`).
+- The target word becomes the cloze with its pinyin as the hint
+  (`{{c1::word::pīnyīn}}`); the back ("Back Extra") holds the pinyin + definition
+  and **audio of the whole sentence** (free `edge-tts`, stored in Anki media).
+- Cards are tagged `chinese-tracker mined` (plus the source text and month) and
+  go to the chosen deck (defaults to your first real deck). Re-mining the same
+  sentence is rejected as a duplicate.
+
+It needs Anki desktop running (AnkiConnect); the card reaches your phone on the
+next dashboard **Sync to Anki**. Endpoint: `POST /api/anki/mine` (`add_cloze_note`
+in `backend/anki.py`, `mine_sentence` in `backend/main.py`).
+
 ## Words page (browse & edit your vocabulary)
 
 The **Words** tab is the home for your full word list:

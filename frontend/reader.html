@@ -145,8 +145,10 @@ function showLookup(word, entries, status) {
       <button data-status="known" onclick="setStatus('${word}','known')">Known <kbd>1</kbd></button>
       <button data-status="learning" onclick="setStatus('${word}','learning')">Learning <kbd>2</kbd></button>
       <button data-status="unknown" class="secondary" onclick="setStatus('${word}','unknown')">Unknown <kbd>3</kbd></button>
+      <button class="secondary" onclick="mineSentence()" title="Make an Anki cloze card from this word's sentence">✚ Mine sentence → Anki</button>
     </div>
     ${editControls(word)}
+    <div id="mine-msg" class="q-status"></div>
   `;
   // If the word has no real definition, open the define form pre-filled.
   if (!hasRealEntry(entries)) toggleDefForm(true);
@@ -520,6 +522,48 @@ async function loadPrep() {
 async function prepMark(word, status) {
   await setStatus(word, status);   // also recolours every occurrence in the reader
   await loadPrep();
+}
+
+// ----- Sentence mining → Anki cloze card -----
+
+// The sentence the selected word sits in: a subtitle line, or — for articles —
+// the run of text around the word bounded by sentence punctuation.
+function currentSentence() {
+  if (!activeTokenEl) return null;
+  const line = activeTokenEl.closest(".sub-line");
+  if (line) {
+    const body = line.querySelector(".sub-body");
+    return body ? body.textContent.trim() : null;
+  }
+  const off = parseInt(activeTokenEl.dataset.offset, 10);
+  if (Number.isNaN(off) || !textPlain) return null;
+  const sep = /[。！？!?；;\n]/;
+  let start = off, end = off;
+  while (start > 0 && !sep.test(textPlain[start - 1])) start--;
+  while (end < textPlain.length && !sep.test(textPlain[end])) end++;
+  return textPlain.slice(start, end).trim();
+}
+
+async function mineSentence() {
+  if (!activeTokenEl) return;
+  const word = activeTokenEl.dataset.word;
+  const sentence = currentSentence();
+  const msg = document.getElementById("mine-msg");
+  if (!msg) return;
+  msg.textContent = "Mining…";
+  try {
+    const res = await api("/api/anki/mine", {
+      method: "POST",
+      body: JSON.stringify({ text_id: parseInt(textId), word, sentence }),
+    });
+    msg.textContent = res.message || "Mined ✓";
+  } catch (e) {
+    msg.textContent = e.message.includes("503")
+      ? "Open Anki desktop (with AnkiConnect) to mine cards."
+      : e.message.includes("409")
+      ? "You've already mined this sentence."
+      : "Error: " + e.message;
+  }
 }
 
 load();

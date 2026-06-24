@@ -110,6 +110,24 @@ def add_note(deck_name: str, word: str, pinyin: str, definition: str,
     return _invoke("addNote", note=note)
 
 
+def add_cloze_note(deck_name: str, text: str, extra: str = "",
+                   audio: str | None = None, tags=None):
+    """Create a Cloze note for sentence mining. `text` is the sentence with the
+    target word wrapped as {{c1::...}}; `extra` (pinyin/definition) and any audio
+    go in the 'Back Extra' field. Uses Anki's built-in Cloze note type."""
+    back_extra = extra or ""
+    if audio:
+        back_extra = f"{back_extra}<br>{audio}".strip("<br>") if back_extra else audio
+    note = {
+        "deckName": deck_name,
+        "modelName": "Cloze",
+        "fields": {"Text": text, "Back Extra": back_extra},
+        "options": {"allowDuplicate": False},
+        "tags": [TRACKER_TAG, "mined"] + list(tags or []),
+    }
+    return _invoke("addNote", note=note)
+
+
 def update_note(note_id: int, pinyin: str, definition: str,
                 example: str | None = None, audio: str | None = None, tags=None):
     """Update an existing tracker note's Back field (and add any new tags)."""
