@@ -115,6 +115,39 @@ that exact moment in a new tab. All text is normalized to simplified on import (
 
 Parsing/fetching lives in `backend/subtitles.py`; lines are stored in the `subtitle_lines` table.
 
+## Learn next (what to study for the most benefit)
+
+Every unknown word costs you comprehension in proportion to how often it appears
+in texts you actually read — and that frequency is exactly what `seen_count`
+tracks. Two surfaces use it:
+
+- **Dashboard "Learn next" card** — your most frequent unknown words across all
+  texts, ranked, each showing its definition, how many times you've seen it, and
+  the running **coverage** you'd reach by learning down to that row. *Coverage* =
+  the share of all word-instances in your texts you already know
+  (`SUM(seen_count)` over known/learning ÷ total). Mark a word *Learning*/*Known*
+  inline and it drops off.
+- **Reader "Prep — what to learn first"** — the same idea scoped to the open
+  text (`text_word_counts`): "you know 69% of this text; learning these 20 gets
+  you to ~79%." Great for softening a hard article before you read it. Marking a
+  word here also recolours every occurrence in the reader.
+
+Served by `GET /api/learn/next?scope=all|text&text_id=&limit=` and
+`GET /api/analytics/coverage` (see `_coverage`/`learn_next` in `backend/main.py`).
+
+## HSK 3.0 progress
+
+The **Progress** tab tracks the New HSK 3.0 (2021) vocabulary — bands 1–6 plus
+the combined 7–9 advanced tier, ~11k words (`backend/data/hsk30.txt`, loaded by
+`backend/hsk.py`; a word that spans levels is attributed to its lowest band).
+Per-band completion bars show how many words you've marked *known*; tapping a
+band lists the words you're still missing, **frequency-ordered** (by `seen_count`)
+so the most useful ones to learn surface first — with inline *Learning*/*Known*.
+
+Coverage and HSK progress are complementary: coverage measures comprehension of
+**your own corpus**, while HSK progress measures a **curriculum** independent of
+what you've read. Endpoints: `GET /api/hsk/progress`, `GET /api/hsk/missing?band=`.
+
 ## Words page (browse & edit your vocabulary)
 
 The **Words** tab is the home for your full word list:

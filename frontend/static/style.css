@@ -159,6 +159,20 @@ label { display: block; margin-bottom: 0.3rem; font-size: 0.85rem; color: var(--
 #words-table .w-actions button { font-size: 0.8rem; padding: 0.3rem 0.6rem; }
 .word-empty { padding: 1.5rem; text-align: center; color: var(--muted); }
 
+/* Learn next (dashboard) */
+.muted-line { color: var(--muted); font-size: 0.9rem; margin-top: 0; }
+#learn-table td { vertical-align: top; }
+#learn-table .w-hanzi { font-size: 1.15rem; }
+#learn-table .w-pinyin { color: var(--accent); white-space: nowrap; }
+#learn-table .w-def-cell {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#learn-table .w-actions { white-space: nowrap; text-align: right; }
+#learn-table .w-actions button { font-size: 0.78rem; padding: 0.25rem 0.55rem; margin-left: 0.3rem; }
+
 /* Reader */
 .reader-text {
   font-size: 1.6rem;
@@ -206,6 +220,59 @@ label { display: block; margin-bottom: 0.3rem; font-size: 0.85rem; color: var(--
 table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
 th, td { text-align: left; padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--border); }
 th { color: var(--muted); font-weight: 600; }
+
+/* HSK progress bands */
+.band-row {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  padding: 0.5rem 0.2rem;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+}
+.band-row:last-child { border-bottom: none; }
+.band-row:hover { background: rgba(79,140,255,0.08); }
+.band-label { flex: 0 0 4.5rem; font-weight: 600; }
+.band-bar {
+  flex: 1 1 auto;
+  position: relative;
+  height: 14px;
+  background: #11141a;
+  border-radius: 7px;
+  overflow: hidden;
+}
+.band-fill {
+  position: absolute;
+  top: 0; left: 0; height: 100%;
+  background: var(--known);
+  border-radius: 7px;
+}
+.band-fill.learning { background: var(--learning); opacity: 0.5; z-index: 0; }
+.band-num { flex: 0 0 7rem; text-align: right; font-size: 0.85rem; color: var(--muted); }
+.band-pct { color: var(--text); font-weight: 600; margin-left: 0.3rem; }
+
+/* Prep panel (reader) */
+#prep-bar { margin-bottom: 1rem; }
+#prep { margin-top: 0.6rem; }
+.prep-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  padding: 0.35rem 0.2rem;
+  border-bottom: 1px solid var(--border);
+}
+.prep-word { font-size: 1.2rem; flex: 0 0 auto; }
+.prep-pinyin { color: var(--accent); white-space: nowrap; flex: 0 0 auto; }
+.prep-def {
+  flex: 1 1 auto;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.prep-freq { color: var(--muted); font-size: 0.8rem; flex: 0 0 auto; }
+.prep-actions { flex: 0 0 auto; white-space: nowrap; }
+.prep-actions button { font-size: 0.75rem; padding: 0.2rem 0.5rem; margin-left: 0.3rem; }
 
 /* Comprehension questions */
 #questions-bar { margin-bottom: 1rem; }

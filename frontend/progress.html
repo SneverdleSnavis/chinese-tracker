@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Progress — Chinese Tracker</title>
+<link rel="stylesheet" href="/static/style.css?v=2" />
+</head>
+<body>
+<div id="nav"></div>
+<main>
+  <h1>HSK 3.0 Progress</h1>
+  <p class="muted-line" id="overall">Loading…</p>
+
+  <div class="card">
+    <div id="bands"></div>
+  </div>
+
+  <div class="card" id="missing-card" style="display:none;">
+    <h2 id="missing-title"></h2>
+    <p class="muted-line" id="missing-sub"></p>
+    <div id="missing-list"></div>
+  </div>
+</main>
+
+<script src="/static/app.js?v=2"></script>
+<script>
+document.getElementById("nav").innerHTML = navHtml("/progress");
+
+function esc(s) {
+  return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+let activeBand = null;
+
+async function loadProgress() {
+  const res = await api("/api/hsk/progress");
+  document.getElementById("overall").innerHTML =
+    `You know <strong>${res.known.toLocaleString()}</strong> of <strong>${res.total.toLocaleString()}</strong> ` +
+    `HSK 3.0 words — <strong>${res.pct.toFixed(1)}%</strong> overall. Tap a band to see which words to learn next.`;
+  document.getElementById("bands").innerHTML = res.bands.map((b) => `
+    <div class="band-row" onclick="openBand(${b.band})">
+      <div class="band-label">HSK ${b.label}</div>
+      <div class="band-bar">
+        <div class="band-fill learning" style="left:${b.pct}%; width:${(b.learning / b.total * 100) || 0}%;"></div>
+        <div class="band-fill" style="width:${b.pct}%;"></div>
+      </div>
+      <div class="band-num">${b.known} / ${b.total} <span class="band-pct">${b.pct.toFixed(0)}%</span></div>
+    </div>`).join("");
+}
+
+async function openBand(band, scroll = true, showLoading = true) {
+  activeBand = band;
+  const card = document.getElementById("missing-card");
+  card.style.display = "block";
+  // Only show the (page-collapsing) loading placeholder when first opening a
+  // band — on an in-place refresh after marking a word, replacing it would
+  // shrink the page and yank the scroll position to the top.
+  if (showLoading) document.getElementById("missing-list").innerHTML = '<p class="muted-line">Loading…</p>';
+  const res = await api(`/api/hsk/missing?band=${band}&limit=80`);
+  document.getElementById("missing-title").textContent = `HSK ${res.label} — words to learn`;
+  document.getElementById("missing-sub").textContent =
+    `${res.total_missing} word(s) not yet known${res.total_missing > res.missing.length ? ` (showing the ${res.missing.length} most frequent in your texts)` : ""}.`;
+  document.getElementById("missing-list").innerHTML = res.missing.map((w) => `
+    <div class="prep-row">
+      <span class="prep-word">${esc(w.word)}</span>
+      <span class="prep-pinyin">${esc(w.pinyin)}</span>
+      <span class="prep-def">${esc(w.definition)}</span>
+      <span class="prep-freq">${w.seen_count ? "×" + w.seen_count : ""}</span>
+      <span class="status-badge ${w.status}">${w.status}</span>
+      <span class="prep-actions">
+        <button onclick="markWord('${esc(w.word)}','learning')">Learning</button>
+        <button class="secondary" onclick="markWord('${esc(w.word)}','known')">Known</button>
+      </span>
+    </div>`).join("") || '<p class="muted-line">All words in this band are known. 🎉</p>';
+  if (scroll) card.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+async function markWord(word, status) {
+  const y = window.scrollY;
+  await api("/api/words/status", { method: "POST", body: JSON.stringify({ word, status }) });
+  await loadProgress();
+  if (activeBand != null) await openBand(activeBand, false, false);
+  window.scrollTo(0, y);
+}
+
+loadProgress();
+</script>
+</body>
+</html>

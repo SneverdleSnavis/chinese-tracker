@@ -12,6 +12,10 @@
   <div id="content-row">
     <div id="video-container"></div>
     <div id="right-col">
+      <div id="prep-bar">
+        <button id="toggle-prep" class="secondary">📋 Prep — what to learn first</button>
+        <div id="prep" style="display:none;"></div>
+      </div>
       <div id="questions-bar">
         <div class="q-controls">
           <strong>Comprehension</strong>
@@ -474,6 +478,48 @@ document.getElementById("clear-questions").addEventListener("click", async () =>
 
 function setMsg(text) {
   document.getElementById("paste-msg").textContent = text;
+}
+
+// ----- Prep: highest-value unknown words in THIS text -----
+
+document.getElementById("toggle-prep").addEventListener("click", async () => {
+  const panel = document.getElementById("prep");
+  if (panel.style.display === "none") {
+    panel.style.display = "block";
+    await loadPrep();
+  } else {
+    panel.style.display = "none";
+  }
+});
+
+async function loadPrep() {
+  const panel = document.getElementById("prep");
+  panel.innerHTML = '<p class="q-status">Loading…</p>';
+  const res = await api(`/api/learn/next?scope=text&text_id=${textId}&limit=20`);
+  if (!res.words.length) {
+    panel.innerHTML = `<p class="q-status">You already know every word in this text — ${res.coverage_pct.toFixed(0)}% coverage.</p>`;
+    return;
+  }
+  const shown = res.words.reduce((a, w) => a + w.share, 0);
+  panel.innerHTML =
+    `<p class="q-status">You know <strong>${res.coverage_pct.toFixed(0)}%</strong> of this text. ` +
+    `Learning these ${res.words.length} would get you to about <strong>${(res.coverage_pct + shown).toFixed(0)}%</strong>.</p>` +
+    res.words.map((w) => `
+      <div class="prep-row">
+        <span class="prep-word">${esc(w.word)}</span>
+        <span class="prep-pinyin">${esc(w.pinyin)}</span>
+        <span class="prep-def">${esc(w.definition)}</span>
+        <span class="prep-freq">×${w.freq}</span>
+        <span class="prep-actions">
+          <button onclick="prepMark('${esc(w.word)}','learning')">Learning</button>
+          <button class="secondary" onclick="prepMark('${esc(w.word)}','known')">Known</button>
+        </span>
+      </div>`).join("");
+}
+
+async function prepMark(word, status) {
+  await setStatus(word, status);   // also recolours every occurrence in the reader
+  await loadPrep();
 }
 
 load();

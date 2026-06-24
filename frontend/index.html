@@ -12,6 +12,15 @@
 
   <div class="stats-grid" id="stats"></div>
 
+  <div class="card" id="learn-card">
+    <h2>Learn next</h2>
+    <p id="coverage-line" class="muted-line">Loading…</p>
+    <table id="learn-table">
+      <thead><tr><th>#</th><th>Word</th><th>Pinyin</th><th>Definition</th><th>Seen</th><th>+Cov</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
   <div class="card">
     <h2>Backup</h2>
     <p style="color: var(--muted); font-size: 0.85rem; margin-top:0;">
@@ -174,8 +183,51 @@ document.getElementById("anki-sync").addEventListener("click", async () => {
   }
 });
 
+function esc(s) {
+  return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+async function markWord(word, status) {
+  await api("/api/words/status", { method: "POST", body: JSON.stringify({ word, status }) });
+  await Promise.all([loadLearnNext(), loadStats()]);
+}
+
+async function loadLearnNext() {
+  const line = document.getElementById("coverage-line");
+  const tbody = document.querySelector("#learn-table tbody");
+  const res = await api("/api/learn/next?limit=15");
+  if (!res.words.length) {
+    line.textContent = res.total_instances
+      ? `You know every word that appears in your texts — ${res.coverage_pct.toFixed(1)}% coverage. Add more texts to find new words to learn.`
+      : "Add some texts first, then the highest-value words to learn will show up here.";
+    tbody.innerHTML = "";
+    return;
+  }
+  const shown = res.words.reduce((a, w) => a + w.share, 0);
+  line.innerHTML =
+    `You understand <strong>${res.coverage_pct.toFixed(1)}%</strong> of the words across your texts. ` +
+    `These are your most frequent unknown words — learning all ${res.words.length} below would add about <strong>+${shown.toFixed(1)}%</strong>.`;
+  let cum = res.coverage_pct;
+  tbody.innerHTML = res.words.map((w, i) => {
+    cum += w.share;
+    return `<tr>
+      <td>${i + 1}</td>
+      <td class="w-hanzi">${esc(w.word)}</td>
+      <td class="w-pinyin">${esc(w.pinyin)}</td>
+      <td class="w-def-cell">${esc(w.definition)}</td>
+      <td>${w.freq}</td>
+      <td title="coverage after learning down to here">${cum.toFixed(1)}%</td>
+      <td class="w-actions">
+        <button onclick="markWord('${esc(w.word)}','learning')">Learning</button>
+        <button class="secondary" onclick="markWord('${esc(w.word)}','known')">Known</button>
+      </td>
+    </tr>`;
+  }).join("");
+}
+
 loadStats();
 loadAnki();
+loadLearnNext();
 </script>
 </body>
 </html>

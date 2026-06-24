@@ -17,6 +17,7 @@ function navHtml(active) {
     ["/", "Dashboard"],
     ["/read", "Reading"],
     ["/words", "Words"],
+    ["/progress", "Progress"],
   ];
   return `<nav><span class="brand">中文 Tracker</span>${items
     .map(

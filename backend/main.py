@@ -11,6 +11,7 @@ from pydantic import BaseModel
 import anki
 import database
 import fetchers
+import hsk
 import subtitles
 import tts
 from database import db
@@ -709,6 +710,142 @@ def analytics_summary():
         }
 
 
+# ---------- Learn next (frequency-ranked study list) ----------
+
+def _coverage(conn):
+    """Corpus coverage: what fraction of all word-instances across your texts you
+    already know. T = total instances (sum of seen_count); known/learning count
+    toward coverage. Frames how much comprehension each unknown word would add."""
+    row = conn.execute(
+        "SELECT COALESCE(SUM(seen_count),0) AS total, "
+        "COALESCE(SUM(CASE WHEN status IN ('known','learning') THEN seen_count ELSE 0 END),0) AS known "
+        "FROM words"
+    ).fetchone()
+    total, known = row["total"], row["known"]
+    return {"total": total, "known_instances": known, "pct": (known / total * 100) if total else 0}
+
+
+@app.get("/api/analytics/coverage")
+def coverage():
+    with db() as conn:
+        return _coverage(conn)
+
+
+@app.get("/api/learn/next")
+def learn_next(scope: str = "all", text_id: int | None = None, limit: int = 25):
+    """Highest-leverage words to study next, ranked by how often they appear.
+    scope='all' ranks unknown words across every text by seen_count; scope='text'
+    ranks a single text's unknown words by their in-text count, so you can prep
+    before reading it. Each word carries its share of running text ('share')."""
+    with db() as conn:
+        if scope == "text":
+            if text_id is None:
+                raise HTTPException(400, "text_id is required for scope='text'")
+            tot = conn.execute(
+                "SELECT COALESCE(SUM(count),0) AS t FROM text_word_counts WHERE text_id = ?",
+                (text_id,),
+            ).fetchone()["t"]
+            known = conn.execute(
+                "SELECT COALESCE(SUM(twc.count),0) AS k FROM text_word_counts twc "
+                "JOIN words w ON w.word = twc.word "
+                "WHERE twc.text_id = ? AND w.status IN ('known','learning')",
+                (text_id,),
+            ).fetchone()["k"]
+            rows = conn.execute(
+                "SELECT twc.word AS word, twc.count AS freq FROM text_word_counts twc "
+                "LEFT JOIN words w ON w.word = twc.word "
+                "WHERE twc.text_id = ? AND COALESCE(w.status,'unknown') = 'unknown' "
+                "ORDER BY twc.count DESC LIMIT ?",
+                (text_id, limit),
+            ).fetchall()
+            denom = tot
+            covered = known
+        else:
+            denom = _coverage(conn)["total"]
+            covered = _coverage(conn)["known_instances"]
+            rows = conn.execute(
+                "SELECT word, seen_count AS freq FROM words "
+                "WHERE status = 'unknown' AND seen_count > 0 "
+                "ORDER BY seen_count DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+
+        words = []
+        for r in rows:
+            py, defn, _ = _effective_entry(conn, r["word"])
+            words.append({
+                "word": r["word"],
+                "freq": r["freq"],
+                "pinyin": py,
+                "definition": defn,
+                "hsk": hsk.band(r["word"]),
+                "share": (r["freq"] / denom * 100) if denom else 0,
+            })
+    return {
+        "scope": scope,
+        "total_instances": denom,
+        "known_instances": covered,
+        "coverage_pct": (covered / denom * 100) if denom else 0,
+        "words": words,
+    }
+
+
+# ---------- HSK 3.0 milestones ----------
+
+@app.get("/api/hsk/progress")
+def hsk_progress():
+    """Per-band completion: how many words in each HSK 3.0 level you've marked
+    known (and learning), as a curriculum-based counterpart to corpus coverage."""
+    sets = hsk.band_word_sets()
+    with db() as conn:
+        known = {r["word"] for r in conn.execute("SELECT word FROM words WHERE status = 'known'").fetchall()}
+        learning = {r["word"] for r in conn.execute("SELECT word FROM words WHERE status = 'learning'").fetchall()}
+    bands = []
+    for b in hsk.BANDS:
+        words = sets.get(b, set())
+        total = len(words)
+        k = len(words & known)
+        bands.append({
+            "band": b,
+            "label": hsk.BAND_LABELS[b],
+            "total": total,
+            "known": k,
+            "learning": len(words & learning),
+            "pct": (k / total * 100) if total else 0,
+        })
+    total_all = sum(b["total"] for b in bands)
+    known_all = sum(b["known"] for b in bands)
+    return {"bands": bands, "total": total_all, "known": known_all,
+            "pct": (known_all / total_all * 100) if total_all else 0}
+
+
+@app.get("/api/hsk/missing")
+def hsk_missing(band: int, limit: int = 100):
+    """Words in a band you haven't marked known yet, frequency-ordered (by
+    seen_count) so the most useful ones to learn surface first."""
+    words = hsk.band_word_sets().get(band, set())
+    with db() as conn:
+        rows = {r["word"]: r for r in conn.execute("SELECT word, status, seen_count FROM words").fetchall()}
+        missing = []
+        for w in words:
+            r = rows.get(w)
+            status = r["status"] if r else "unknown"
+            if status == "known":
+                continue
+            missing.append({"word": w, "status": status, "seen_count": r["seen_count"] if r else 0})
+        total_missing = len(missing)
+        missing.sort(key=lambda x: (-x["seen_count"], x["word"]))
+        missing = missing[:limit]
+        for m in missing:  # attach definitions only for the page-sized slice
+            m["pinyin"], m["definition"], _ = _effective_entry(conn, m["word"])
+    return {
+        "band": band,
+        "label": hsk.BAND_LABELS.get(band, str(band)),
+        "missing": missing,
+        "total_missing": total_missing,
+    }
+
+
 # ---------- Comprehension questions (multiple choice) ----------
 
 class MCQuestion(BaseModel):
@@ -1114,6 +1251,11 @@ def read_page():
 @app.get("/words")
 def words_page():
     return FileResponse(FRONTEND_DIR / "words.html")
+
+
+@app.get("/progress")
+def progress_page():
+    return FileResponse(FRONTEND_DIR / "progress.html")
 
 
 @app.get("/read/{text_id}")
