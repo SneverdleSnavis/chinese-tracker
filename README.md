@@ -92,6 +92,22 @@ that exact moment in a new tab. All text is normalized to simplified on import (
 
 Parsing/fetching lives in `backend/subtitles.py`; lines are stored in the `subtitle_lines` table.
 
+## Words page (browse & edit your vocabulary)
+
+The **Words** tab is the home for your full word list:
+- **Search** across hanzi, pinyin, and definition; **filter** by status, Anki-sync
+  state, or whether you've edited the word; **sort** by recency / frequency / A–Z.
+- **Edit** any word's pinyin and definition inline. An edit is stored as an
+  authoritative override (`custom_definitions`) that **takes precedence over
+  CC-CEDICT everywhere** — so a corrected definition shows up consistently in
+  every future text, the reader, exports, and Anki cards. A word you've edited is
+  marked "edited"; **Revert** removes the override and restores the dictionary entry.
+- Change a word's status (known/learning/unknown) straight from the table.
+
+The list is served by `GET /api/words` (with `q`/`status`/`synced`/`custom`/`sort`/
+`limit`/`offset`), edits by `POST /api/words/{word}`, and reverts by
+`DELETE /api/words/{word}/custom`.
+
 ## Fixing segmentation & missing words
 
 In the reader, selecting a word reveals edit controls in the lookup panel:

@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Words · 中文 Tracker</title>
+  <link rel="stylesheet" href="/static/style.css?v=2">
+</head>
+<body>
+<div id="nav"></div>
+<main>
+  <h1>Words</h1>
+
+  <div class="card">
+    <div class="word-filters">
+      <input id="search" type="text" placeholder="Search word, pinyin, or definition..." autocomplete="off">
+      <select id="f-status">
+        <option value="">All statuses</option>
+        <option value="known">Known</option>
+        <option value="learning">Learning</option>
+        <option value="unknown">Unknown</option>
+      </select>
+      <select id="f-synced">
+        <option value="">Anki: any</option>
+        <option value="yes">In Anki</option>
+        <option value="no">Not in Anki</option>
+      </select>
+      <select id="f-custom">
+        <option value="">Edited: any</option>
+        <option value="yes">Edited only</option>
+        <option value="no">Not edited</option>
+      </select>
+      <select id="f-sort">
+        <option value="recent">Recently seen</option>
+        <option value="seen">Most seen</option>
+        <option value="word">A–Z</option>
+      </select>
+    </div>
+    <div class="word-meta">
+      <span id="count">Loading...</span>
+      <a class="btn secondary" href="/api/words/export">Export CSV</a>
+    </div>
+  </div>
+
+  <div class="card" style="padding:0; overflow:hidden;">
+    <table id="words-table">
+      <thead><tr>
+        <th>Word</th><th>Pinyin</th><th>Definition</th><th>Status</th>
+        <th>Anki</th><th>Seen</th><th></th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+    <div id="empty" class="word-empty" style="display:none;">No words match these filters.</div>
+  </div>
+
+  <div style="text-align:center; margin:1rem 0;">
+    <button id="load-more" class="secondary" style="display:none;">Load more</button>
+  </div>
+</main>
+
+<script src="/static/app.js?v=2"></script>
+<script>
+document.getElementById("nav").innerHTML = navHtml("/words");
+
+const PAGE = 100;
+let offset = 0;
+let total = 0;
+let loading = false;
+
+function params() {
+  const p = new URLSearchParams();
+  const q = document.getElementById("search").value.trim();
+  if (q) p.set("q", q);
+  const status = document.getElementById("f-status").value;
+  if (status) p.set("status", status);
+  const synced = document.getElementById("f-synced").value;
+  if (synced) p.set("synced", synced);
+  const custom = document.getElementById("f-custom").value;
+  if (custom) p.set("custom", custom);
+  p.set("sort", document.getElementById("f-sort").value);
+  p.set("limit", PAGE);
+  p.set("offset", offset);
+  return p.toString();
+}
+
+function esc(s) {
+  return (s == null ? "" : String(s)).replace(/[&<>"]/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+function statusSelect(w) {
+  const opts = ["unknown", "learning", "known"]
+    .map((s) => `<option value="${s}" ${w.status === s ? "selected" : ""}>${s}</option>`)
+    .join("");
+  return `<select class="completion-select ${w.status}" data-word="${esc(w.word)}" data-role="status">${opts}</select>`;
+}
+
+function rowHtml(w) {
+  const custom = w.has_custom
+    ? ` <span class="status-badge learning" title="You edited this">edited</span>` : "";
+  const anki = w.in_anki || w.exported_at ? "✓" : "";
+  return `<tr data-word="${esc(w.word)}">
+    <td class="w-hanzi">${esc(w.word)}</td>
+    <td class="w-pinyin">${esc(w.pinyin)}</td>
+    <td class="w-def">${esc(w.definition)}${custom}</td>
+    <td>${statusSelect(w)}</td>
+    <td style="text-align:center; color: var(--known);">${anki}</td>
+    <td style="text-align:center; color: var(--muted);">${w.seen_count}</td>
+    <td class="w-actions"><button class="secondary" data-role="edit">Edit</button></td>
+  </tr>`;
+}
+
+async function load(reset) {
+  if (loading) return;
+  loading = true;
+  if (reset) { offset = 0; }
+  const res = await api("/api/words?" + params());
+  total = res.total;
+  const tbody = document.querySelector("#words-table tbody");
+  if (reset) tbody.innerHTML = "";
+  tbody.insertAdjacentHTML("beforeend", res.words.map(rowHtml).join(""));
+  offset += res.words.length;
+  document.getElementById("count").textContent =
+    `${total} word${total === 1 ? "" : "s"}` + (offset < total ? ` (showing ${offset})` : "");
+  document.getElementById("load-more").style.display = offset < total ? "inline-block" : "none";
+  document.getElementById("empty").style.display = total === 0 ? "block" : "none";
+  loading = false;
+}
+
+// --- inline editing ---
+function enterEdit(tr) {
+  const word = tr.dataset.word;
+  const pin = tr.querySelector(".w-pinyin").textContent;
+  const def = tr.querySelector(".w-def").childNodes[0].textContent;
+  tr.querySelector(".w-pinyin").innerHTML = `<input data-role="pinyin" value="${esc(pin)}">`;
+  tr.querySelector(".w-def").innerHTML = `<input data-role="def" value="${esc(def)}">`;
+  tr.querySelector(".w-actions").innerHTML =
+    `<button data-role="save">Save</button> <button class="secondary" data-role="cancel">Cancel</button>`;
+}
+
+async function saveEdit(tr) {
+  const word = tr.dataset.word;
+  const pinyin = tr.querySelector('[data-role="pinyin"]').value;
+  const definition = tr.querySelector('[data-role="def"]').value.trim();
+  if (!definition) { alert("Definition can't be empty."); return; }
+  const res = await api(`/api/words/${encodeURIComponent(word)}`, {
+    method: "POST",
+    body: JSON.stringify({ pinyin, definition }),
+  });
+  replaceRow(tr, { word, pinyin: res.pinyin, definition: res.definition,
+    status: tr.querySelector('[data-role="status"]').value, has_custom: true,
+    in_anki: tr.querySelector("td:nth-child(5)").textContent.trim() === "✓",
+    seen_count: tr.querySelector("td:nth-child(6)").textContent.trim() });
+}
+
+async function revert(tr) {
+  const word = tr.dataset.word;
+  if (!confirm(`Revert "${word}" to its dictionary definition? Your edit will be removed.`)) return;
+  const res = await api(`/api/words/${encodeURIComponent(word)}/custom`, { method: "DELETE" });
+  replaceRow(tr, { word, pinyin: res.pinyin, definition: res.definition,
+    status: tr.querySelector('[data-role="status"]').value, has_custom: false,
+    in_anki: tr.querySelector("td:nth-child(5)").textContent.trim() === "✓",
+    seen_count: tr.querySelector("td:nth-child(6)").textContent.trim() });
+}
+
+function replaceRow(tr, w) {
+  tr.outerHTML = rowHtml(w);
+}
+
+// --- events ---
+const tbody = document.querySelector("#words-table tbody");
+tbody.addEventListener("click", (e) => {
+  const role = e.target.dataset.role;
+  const tr = e.target.closest("tr");
+  if (role === "edit") enterEdit(tr);
+  else if (role === "save") saveEdit(tr);
+  else if (role === "cancel") load(true);
+});
+
+tbody.addEventListener("change", async (e) => {
+  if (e.target.dataset.role !== "status") return;
+  const word = e.target.dataset.word;
+  await api("/api/words/status", {
+    method: "POST",
+    body: JSON.stringify({ word, status: e.target.value }),
+  });
+  e.target.className = "completion-select " + e.target.value;
+});
+
+let searchTimer;
+document.getElementById("search").addEventListener("input", () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => load(true), 250);
+});
+["f-status", "f-synced", "f-custom", "f-sort"].forEach((id) =>
+  document.getElementById(id).addEventListener("change", () => load(true)));
+document.getElementById("load-more").addEventListener("click", () => load(false));
+
+load(true);
+</script>
+</body>
+</html>

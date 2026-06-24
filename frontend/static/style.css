@@ -133,6 +133,30 @@ label { display: block; margin-bottom: 0.3rem; font-size: 0.85rem; color: var(--
 .completion-select.reading { border-color: var(--learning); color: var(--learning); }
 .completion-select.unread { border-color: var(--border); color: var(--muted); }
 
+/* Words page */
+.word-filters {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+.word-filters #search { flex: 1 1 220px; }
+.word-filters select { width: auto; flex: 0 0 auto; }
+.word-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 0.85rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+#words-table .w-hanzi { font-size: 1.15rem; }
+#words-table .w-pinyin { color: var(--accent); white-space: nowrap; }
+#words-table td { vertical-align: middle; }
+#words-table input { padding: 0.35rem; }
+#words-table .w-actions { white-space: nowrap; text-align: right; }
+#words-table .w-actions button { font-size: 0.8rem; padding: 0.3rem 0.6rem; }
+.word-empty { padding: 1.5rem; text-align: center; color: var(--muted); }
+
 /* Reader */
 .reader-text {
   font-size: 1.6rem;

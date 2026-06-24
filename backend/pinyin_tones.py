@@ -49,7 +49,24 @@ def _convert_syllable(syl: str) -> str:
     return result
 
 
+# A pinyin syllable carrying a tone digit. Matching these directly (rather than
+# splitting on spaces) also handles CC-CEDICT's compact forms like "zhi1dao5".
+_TONED_SYLLABLE_RE = re.compile(r"[A-Za-zü:]+[1-5]")
+
+
 def numbered_to_diacritic(pinyin: str) -> str:
     if not pinyin:
         return pinyin
-    return " ".join(_convert_syllable(tok) for tok in pinyin.split(" "))
+    return _TONED_SYLLABLE_RE.sub(lambda m: _convert_syllable(m.group(0)), pinyin)
+
+
+_BRACKET_RE = re.compile(r"\[([^\]]+)\]")
+
+
+def convert_bracketed(text: str) -> str:
+    """Convert numbered pinyin that appears inside [...] within CC-CEDICT
+    definition text (e.g. 'CL:个|个[ge4]' -> 'CL:个|个[gè]'). Leaves the rest
+    of the text untouched."""
+    if not text or "[" not in text:
+        return text
+    return _BRACKET_RE.sub(lambda m: "[" + numbered_to_diacritic(m.group(1)) + "]", text)

@@ -32,6 +32,16 @@ def now():
     return datetime.now(timezone.utc).isoformat()
 
 
+@app.middleware("http")
+async def revalidate_static(request, call_next):
+    """Tell browsers to revalidate /static assets each load so JS/CSS changes
+    show up immediately instead of being served stale from cache."""
+    response = await call_next(request)
+    if request.url.path.startswith("/static"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 @app.on_event("startup")
 def startup():
     database.init_db()
@@ -48,13 +58,49 @@ class WordStatusUpdate(BaseModel):
 
 
 @app.get("/api/words")
-def list_words(status: str | None = None):
+def list_words(
+    q: str | None = None,
+    status: str | None = None,
+    synced: str | None = None,   # 'yes' = in Anki, 'no' = not yet
+    custom: str | None = None,   # 'yes' = has a user override
+    sort: str = "recent",        # recent | seen | word
+    limit: int = 100,
+    offset: int = 0,
+):
+    """Search/filter the full word list. Returns {total, words} where each word
+    also carries has_custom (whether the user has overridden its definition)."""
+    clauses, params = [], []
+    if status in ("unknown", "learning", "known"):
+        clauses.append("w.status = ?")
+        params.append(status)
+    if synced == "yes":
+        clauses.append("w.exported_at IS NOT NULL")
+    elif synced == "no":
+        clauses.append("w.exported_at IS NULL")
+    if custom == "yes":
+        clauses.append("cd.word IS NOT NULL")
+    elif custom == "no":
+        clauses.append("cd.word IS NULL")
+    if q:
+        clauses.append("(w.word LIKE ? OR w.pinyin LIKE ? OR w.definition LIKE ?)")
+        like = f"%{q}%"
+        params += [like, like, like]
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    order = {
+        "recent": "w.last_seen DESC",
+        "seen": "w.seen_count DESC",
+        "word": "w.word ASC",
+    }.get(sort, "w.last_seen DESC")
+
+    base = "FROM words w LEFT JOIN custom_definitions cd ON cd.word = w.word"
     with db() as conn:
-        if status:
-            rows = conn.execute("SELECT * FROM words WHERE status = ? ORDER BY last_seen DESC", (status,)).fetchall()
-        else:
-            rows = conn.execute("SELECT * FROM words ORDER BY last_seen DESC").fetchall()
-        return [dict(r) for r in rows]
+        total = conn.execute(f"SELECT COUNT(*) {base} {where}", params).fetchone()[0]
+        rows = conn.execute(
+            f"SELECT w.*, (cd.word IS NOT NULL) AS has_custom {base} {where} "
+            f"ORDER BY {order} LIMIT ? OFFSET ?",
+            params + [limit, offset],
+        ).fetchall()
+    return {"total": total, "words": [dict(r) for r in rows]}
 
 
 @app.get("/api/words/export")
@@ -64,10 +110,11 @@ def export_words():
     import io
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(["word", "status", "pinyin", "definition", "seen_count", "first_seen", "last_seen", "status_updated"])
+    writer.writerow(["word", "status", "pinyin", "definition", "seen_count", "first_seen", "last_seen", "status_updated", "in_anki"])
     with db() as conn:
         rows = conn.execute(
-            "SELECT word, status, pinyin, definition, seen_count, first_seen, last_seen, status_updated "
+            "SELECT word, status, pinyin, definition, seen_count, first_seen, last_seen, status_updated, "
+            "CASE WHEN exported_at IS NOT NULL THEN 'yes' ELSE 'no' END AS in_anki "
             "FROM words ORDER BY status, word"
         ).fetchall()
         for r in rows:
@@ -106,6 +153,92 @@ def set_word_status(body: WordStatusUpdate):
                 (body.word, body.status, ts, ts, ts),
             )
     return {"ok": True}
+
+
+def _effective_entry(conn, word: str):
+    """Return (pinyin, definition, source) using the same precedence as the
+    reader: a user override wins, then CC-CEDICT, then the stored words row."""
+    custom = _custom_defs(conn, {word})
+    if word in custom:
+        return custom[word]["pinyin"], custom[word]["definition"], "custom"
+    from dictionary import lookup as cedict_lookup
+    entries = cedict_lookup(word)
+    if entries:
+        return entries[0]["pinyin"], entries[0]["definition"], "cedict"
+    row = conn.execute("SELECT pinyin, definition FROM words WHERE word = ?", (word,)).fetchone()
+    if row:
+        return row["pinyin"] or "", row["definition"] or "", "words"
+    return "", "", "none"
+
+
+class WordEdit(BaseModel):
+    pinyin: str | None = None
+    definition: str | None = None
+    status: str | None = None
+
+
+@app.post("/api/words/{word}")
+def edit_word(word: str, body: WordEdit):
+    """Edit a word's pinyin/definition/status. A pinyin or definition change is
+    stored as an authoritative override (custom_definitions) so it appears
+    consistently in every future text, and is mirrored onto the words row."""
+    word = to_simplified(word.strip())
+    if not word:
+        raise HTTPException(400, "word is required")
+    if body.status is not None and body.status not in ("unknown", "learning", "known"):
+        raise HTTPException(400, "invalid status")
+    ts = now()
+    with db() as conn:
+        cur_py, cur_def, _ = _effective_entry(conn, word)
+        new_py = body.pinyin.strip() if body.pinyin is not None else cur_py
+        new_def = body.definition.strip() if body.definition is not None else cur_def
+
+        if body.pinyin is not None or body.definition is not None:
+            if not new_def:
+                raise HTTPException(400, "definition cannot be empty")
+            conn.execute(
+                "INSERT INTO custom_definitions (word, pinyin, definition, created_at) "
+                "VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(word) DO UPDATE SET pinyin=excluded.pinyin, definition=excluded.definition",
+                (word, new_py, new_def, ts),
+            )
+
+        existing = conn.execute("SELECT word FROM words WHERE word = ?", (word,)).fetchone()
+        if existing:
+            if body.status is not None:
+                conn.execute(
+                    "UPDATE words SET pinyin = ?, definition = ?, status = ?, status_updated = ? WHERE word = ?",
+                    (new_py, new_def, body.status, ts, word),
+                )
+            else:
+                conn.execute(
+                    "UPDATE words SET pinyin = ?, definition = ? WHERE word = ?",
+                    (new_py, new_def, word),
+                )
+        else:
+            conn.execute(
+                "INSERT INTO words (word, status, pinyin, definition, seen_count, first_seen, last_seen, status_updated) "
+                "VALUES (?, ?, ?, ?, 0, ?, ?, ?)",
+                (word, body.status or "unknown", new_py, new_def, ts, ts, ts),
+            )
+    return {"ok": True, "word": word, "pinyin": new_py, "definition": new_def, "status": body.status}
+
+
+@app.delete("/api/words/{word}/custom")
+def revert_word(word: str):
+    """Remove a user override, reverting the word to its CC-CEDICT definition."""
+    word = to_simplified(word.strip())
+    with db() as conn:
+        conn.execute("DELETE FROM custom_definitions WHERE word = ?", (word,))
+        from dictionary import lookup as cedict_lookup
+        entries = cedict_lookup(word)
+        if entries:
+            conn.execute(
+                "UPDATE words SET pinyin = ?, definition = ? WHERE word = ?",
+                (entries[0]["pinyin"], entries[0]["definition"], word),
+            )
+        py, defn, source = _effective_entry(conn, word)
+    return {"ok": True, "word": word, "pinyin": py, "definition": defn, "source": source}
 
 
 def _record_word_seen(conn, word: str, pinyin: str = "", definition: str = ""):
@@ -202,14 +335,14 @@ def _tokenize_with_status(conn, content: str, record_seen: bool = True):
         ).fetchall()
         words_status = {r["word"]: r["status"] for r in status_rows}
 
-    # Fill in user-supplied definitions for words CC-CEDICT doesn't cover.
-    missing = {t["text"] for t in tokens if t["is_chinese"] and not t["entries"]}
-    custom = _custom_defs(conn, missing)
+    # User-supplied definitions take precedence over CC-CEDICT, so a correction
+    # (or a definition for a word CC-CEDICT misses) shows up consistently.
+    custom = _custom_defs(conn, chinese_words)
 
     for tok in tokens:
         if tok["is_chinese"]:
             tok["status"] = words_status.get(tok["text"], "unknown")
-            if not tok["entries"] and tok["text"] in custom:
+            if tok["text"] in custom:
                 tok["entries"] = [custom[tok["text"]]]
             if record_seen:
                 pinyin = tok["entries"][0]["pinyin"] if tok["entries"] else ""
@@ -340,10 +473,9 @@ def lookup_word(word: str):
     from dictionary import lookup as cedict_lookup
     entries = cedict_lookup(word)
     with db() as conn:
-        if not entries:
-            custom = _custom_defs(conn, {word})
-            if word in custom:
-                entries = [custom[word]]
+        custom = _custom_defs(conn, {word})
+        if word in custom:  # a user edit overrides CC-CEDICT
+            entries = [custom[word]]
         status_row = conn.execute("SELECT status FROM words WHERE word = ?", (word,)).fetchone()
     status = status_row["status"] if status_row else "unknown"
     return {
@@ -769,6 +901,11 @@ def index():
 @app.get("/read")
 def read_page():
     return FileResponse(FRONTEND_DIR / "read.html")
+
+
+@app.get("/words")
+def words_page():
+    return FileResponse(FRONTEND_DIR / "words.html")
 
 
 @app.get("/read/{text_id}")

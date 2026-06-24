@@ -16,6 +16,7 @@ function navHtml(active) {
   const items = [
     ["/", "Dashboard"],
     ["/read", "Reading"],
+    ["/words", "Words"],
   ];
   return `<nav><span class="brand">中文 Tracker</span>${items
     .map(

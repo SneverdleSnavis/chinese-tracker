@@ -2,7 +2,7 @@ import re
 from pathlib import Path
 from functools import lru_cache
 
-from pinyin_tones import numbered_to_diacritic
+from pinyin_tones import numbered_to_diacritic, convert_bracketed
 
 CEDICT_PATH = Path(__file__).parent / "data" / "cedict.txt"
 
@@ -22,7 +22,10 @@ def load_dictionary():
                 continue
             traditional, simplified, pinyin, definition = m.groups()
             defs = [d for d in definition.split("/") if d]
-            entry = {"pinyin": numbered_to_diacritic(pinyin), "definition": "; ".join(defs)}
+            entry = {
+                "pinyin": numbered_to_diacritic(pinyin),
+                "definition": convert_bracketed("; ".join(defs)),
+            }
             entries.setdefault(simplified, []).append(entry)
             if traditional != simplified:
                 entries.setdefault(traditional, []).append(entry)
