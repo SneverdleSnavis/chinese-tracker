@@ -221,6 +221,21 @@ table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
 th, td { text-align: left; padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--border); }
 th { color: var(--muted); font-weight: 600; }
 
+/* Activity heatmap + growth chart (Progress) */
+.heatmap-svg { max-width: 100%; display: block; }
+.hm-label { fill: var(--muted); font-size: 9px; }
+.growth-svg { display: block; }
+.grid-line { stroke: var(--border); stroke-width: 1; }
+.axis-label { fill: var(--muted); font-size: 9px; }
+.line-known { stroke: var(--known); stroke-width: 2; }
+.line-seen { stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 4 3; opacity: 0.8; }
+.dot-known { fill: var(--known); }
+.dot-seen { fill: var(--accent); }
+.chart-legend { display: flex; align-items: center; gap: 0.4rem; color: var(--muted); font-size: 0.8rem; margin-top: 0.5rem; }
+.chart-legend .key { width: 12px; height: 12px; border-radius: 3px; display: inline-block; margin-left: 0.8rem; }
+.chart-legend .key-known { background: var(--known); }
+.chart-legend .key-seen { background: var(--accent); }
+
 /* HSK progress bands */
 .band-row {
   display: flex;

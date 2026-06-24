@@ -135,9 +135,25 @@ tracks. Two surfaces use it:
 Served by `GET /api/learn/next?scope=all|text&text_id=&limit=` and
 `GET /api/analytics/coverage` (see `_coverage`/`learn_next` in `backend/main.py`).
 
+## Progress dashboard (streaks, activity, growth)
+
+The top of the **Progress** tab summarises your study habit:
+- **Streak cards** — current day streak (🔥 when you've studied today), longest
+  streak, total active days, and your known-word count.
+- **Activity heatmap** — a GitHub-style 26-week calendar; each day is shaded by
+  how many lookups and status changes you made (hover for the exact count).
+- **Vocabulary growth** — a line chart of cumulative *known words* and *words
+  encountered* over time.
+
+A "study day" / activity is any day with a word lookup or a status change. The
+data comes from `GET /api/analytics/timeline` (`known_series`/`seen_series` are
+cumulative by `status_updated`/`first_seen`; `activity` is per-day counts;
+`streak` is computed over active days, all in UTC). Charts are inline SVG — no
+chart library.
+
 ## HSK 3.0 progress
 
-The **Progress** tab tracks the New HSK 3.0 (2021) vocabulary — bands 1–6 plus
+The lower **Progress** section tracks the New HSK 3.0 (2021) vocabulary — bands 1–6 plus
 the combined 7–9 advanced tier, ~11k words (`backend/data/hsk30.txt`, loaded by
 `backend/hsk.py`; a word that spans levels is attributed to its lowest band).
 Per-band completion bars show how many words you've marked *known*; tapping a

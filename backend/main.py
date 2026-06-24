@@ -710,6 +710,78 @@ def analytics_summary():
         }
 
 
+@app.get("/api/analytics/timeline")
+def analytics_timeline(days: int = 371):
+    """Data for the Progress dashboard: cumulative vocabulary growth, a per-day
+    activity map (for a heatmap), and study streaks. All dates are UTC (matching
+    how timestamps are stored)."""
+    from datetime import datetime, timezone, date, timedelta
+
+    def _cumulative(rows):
+        out, total = [], 0
+        for r in rows:
+            if not r["d"]:
+                continue
+            total += r["c"]
+            out.append({"date": r["d"], "value": total})
+        return out
+
+    with db() as conn:
+        known_rows = conn.execute(
+            "SELECT substr(status_updated,1,10) d, COUNT(*) c FROM words "
+            "WHERE status='known' AND status_updated IS NOT NULL GROUP BY d ORDER BY d"
+        ).fetchall()
+        seen_rows = conn.execute(
+            "SELECT substr(first_seen,1,10) d, COUNT(*) c FROM words "
+            "WHERE first_seen IS NOT NULL GROUP BY d ORDER BY d"
+        ).fetchall()
+        # Activity = lookups + status changes, per day (intensity for the heatmap).
+        activity = {}
+        for r in conn.execute("SELECT substr(looked_up_at,1,10) d, COUNT(*) c FROM lookups GROUP BY d"):
+            if r["d"]:
+                activity[r["d"]] = activity.get(r["d"], 0) + r["c"]
+        for r in conn.execute("SELECT substr(status_updated,1,10) d, COUNT(*) c FROM words WHERE status_updated IS NOT NULL GROUP BY d"):
+            if r["d"]:
+                activity[r["d"]] = activity.get(r["d"], 0) + r["c"]
+
+    known_series = _cumulative(known_rows)
+    seen_series = _cumulative(seen_rows)
+
+    # Streaks over the set of active days.
+    active = set(activity.keys())
+    today = datetime.now(timezone.utc).date()
+    longest = run = 0
+    prev = None
+    for d in sorted(active):
+        cur = date.fromisoformat(d)
+        run = run + 1 if (prev and (cur - prev).days == 1) else 1
+        longest = max(longest, run)
+        prev = cur
+    anchor = today if today.isoformat() in active else today - timedelta(days=1)
+    current = 0
+    d = anchor
+    while d.isoformat() in active:
+        current += 1
+        d -= timedelta(days=1)
+
+    # Trim the activity map to the requested window for the heatmap.
+    cutoff = (today - timedelta(days=days - 1)).isoformat()
+    activity_window = {d: c for d, c in activity.items() if d >= cutoff}
+
+    return {
+        "today": today.isoformat(),
+        "known_series": known_series,
+        "seen_series": seen_series,
+        "activity": activity_window,
+        "streak": {
+            "current": current,
+            "longest": longest,
+            "active_today": today.isoformat() in active,
+            "total_active_days": len(active),
+        },
+    }
+
+
 # ---------- Learn next (frequency-ranked study list) ----------
 
 def _coverage(conn):

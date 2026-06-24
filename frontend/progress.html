@@ -8,10 +8,23 @@
 <body>
 <div id="nav"></div>
 <main>
-  <h1>HSK 3.0 Progress</h1>
-  <p class="muted-line" id="overall">Loading…</p>
+  <h1>Progress</h1>
+
+  <div class="stats-grid" id="streak-stats"></div>
 
   <div class="card">
+    <h2>Activity</h2>
+    <div id="heatmap"></div>
+  </div>
+
+  <div class="card">
+    <h2>Vocabulary growth</h2>
+    <div id="growth"></div>
+  </div>
+
+  <div class="card">
+    <h2>HSK 3.0</h2>
+    <p class="muted-line" id="overall">Loading…</p>
     <div id="bands"></div>
   </div>
 
@@ -29,6 +42,120 @@ document.getElementById("nav").innerHTML = navHtml("/progress");
 function esc(s) {
   return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 }
+
+// ---------- Streaks + heatmap + growth ----------
+
+function dayDiff(a, b) {
+  return Math.round((Date.UTC(a.getUTCFullYear(), a.getUTCMonth(), a.getUTCDate()) -
+    Date.UTC(b.getUTCFullYear(), b.getUTCMonth(), b.getUTCDate())) / 86400000);
+}
+
+async function loadTimeline() {
+  const t = await api("/api/analytics/timeline");
+  const s = t.streak;
+  document.getElementById("streak-stats").innerHTML = `
+    <div class="stat"><div class="num">${s.current}${s.active_today ? " 🔥" : ""}</div><div class="label">Day streak</div></div>
+    <div class="stat"><div class="num">${s.longest}</div><div class="label">Longest streak</div></div>
+    <div class="stat"><div class="num">${s.total_active_days}</div><div class="label">Active days</div></div>
+    <div class="stat known"><div class="num">${(t.known_series.slice(-1)[0] || {}).value || 0}</div><div class="label">Known words</div></div>
+  `;
+  renderHeatmap(t.activity, t.today);
+  renderGrowth(t.known_series, t.seen_series, t.today);
+}
+
+function renderHeatmap(activity, todayStr) {
+  const weeks = 26, cell = 12, gap = 3, topPad = 16, leftPad = 24;
+  const today = new Date(todayStr + "T00:00:00Z");
+  const start = new Date(today);
+  start.setUTCDate(start.getUTCDate() - (weeks - 1) * 7);
+  start.setUTCDate(start.getUTCDate() - start.getUTCDay()); // back to Sunday
+  const cols = Math.floor(dayDiff(today, start) / 7) + 1;
+  const width = leftPad + cols * (cell + gap);
+  const height = topPad + 7 * (cell + gap);
+
+  const max = Math.max(1, ...Object.values(activity));
+  function fill(count) {
+    if (!count) return "var(--border)";
+    const level = count / max;
+    const alpha = 0.25 + 0.75 * Math.min(1, Math.sqrt(level)); // perceptual-ish ramp
+    return `rgba(46,125,50,${alpha.toFixed(2)})`;
+  }
+
+  let rects = "";
+  const monthLabels = [];
+  let lastMonth = -1, lastLabelX = -99;
+  for (let i = 0; i < cols * 7; i++) {
+    const d = new Date(start);
+    d.setUTCDate(d.getUTCDate() + i);
+    if (dayDiff(d, today) > 0) break;
+    const col = Math.floor(dayDiff(d, start) / 7);
+    const row = d.getUTCDay();
+    const iso = d.toISOString().slice(0, 10);
+    const count = activity[iso] || 0;
+    const x = leftPad + col * (cell + gap);
+    const y = topPad + row * (cell + gap);
+    rects += `<rect x="${x}" y="${y}" width="${cell}" height="${cell}" rx="2" fill="${fill(count)}">` +
+      `<title>${iso}: ${count} action${count === 1 ? "" : "s"}</title></rect>`;
+    if (row === 0 && d.getUTCMonth() !== lastMonth) {
+      lastMonth = d.getUTCMonth();
+      if (x - lastLabelX >= 22) {  // avoid overlapping labels at month boundaries
+        const m = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][lastMonth];
+        monthLabels.push(`<text x="${x}" y="${topPad - 5}" class="hm-label">${m}</text>`);
+        lastLabelX = x;
+      }
+    }
+  }
+  const dayLabels = [[1,"Mon"],[3,"Wed"],[5,"Fri"]]
+    .map(([r,l]) => `<text x="0" y="${topPad + r*(cell+gap) + cell-2}" class="hm-label">${l}</text>`).join("");
+
+  document.getElementById("heatmap").innerHTML =
+    `<svg viewBox="0 0 ${width} ${height}" width="100%" preserveAspectRatio="xMinYMin meet" class="heatmap-svg">` +
+    monthLabels.join("") + dayLabels + rects + `</svg>` +
+    `<p class="muted-line" style="margin:0.5rem 0 0;">Last ${weeks} weeks · darker = more lookups and status changes that day.</p>`;
+}
+
+function renderGrowth(known, seen, todayStr) {
+  const box = document.getElementById("growth");
+  if (!known.length && !seen.length) {
+    box.innerHTML = '<p class="muted-line">No history yet — keep studying and your growth curve will fill in here.</p>';
+    return;
+  }
+  const W = 640, H = 200, padL = 40, padR = 12, padT = 12, padB = 22;
+  const allDates = [...known, ...seen].map((p) => p.date);
+  const minDate = new Date(allDates.reduce((a, b) => (a < b ? a : b)) + "T00:00:00Z");
+  const today = new Date(todayStr + "T00:00:00Z");
+  const span = Math.max(1, dayDiff(today, minDate));
+  const maxVal = Math.max(1, ...known.map((p) => p.value), ...seen.map((p) => p.value));
+  const x = (ds) => padL + (dayDiff(new Date(ds + "T00:00:00Z"), minDate) / span) * (W - padL - padR);
+  const y = (v) => padT + (1 - v / maxVal) * (H - padT - padB);
+
+  function path(series) {
+    if (!series.length) return "";
+    return series.map((p, i) => `${i ? "L" : "M"}${x(p.date).toFixed(1)},${y(p.value).toFixed(1)}`).join(" ");
+  }
+  function dots(series, cls) {
+    return series.map((p) => `<circle cx="${x(p.date).toFixed(1)}" cy="${y(p.value).toFixed(1)}" r="2.5" class="${cls}"><title>${p.date}: ${p.value}</title></circle>`).join("");
+  }
+  // y gridlines
+  let grid = "";
+  for (let g = 0; g <= 4; g++) {
+    const v = Math.round((maxVal * g) / 4);
+    const yy = y(v);
+    grid += `<line x1="${padL}" y1="${yy}" x2="${W - padR}" y2="${yy}" class="grid-line"/>` +
+      `<text x="${padL - 6}" y="${yy + 3}" class="axis-label" text-anchor="end">${v}</text>`;
+  }
+  const seenPath = path(seen), knownPath = path(known);
+  box.innerHTML =
+    `<svg viewBox="0 0 ${W} ${H}" width="100%" class="growth-svg">` +
+    grid +
+    (seenPath ? `<path d="${seenPath}" class="line-seen" fill="none"/>` + dots(seen, "dot-seen") : "") +
+    (knownPath ? `<path d="${knownPath}" class="line-known" fill="none"/>` + dots(known, "dot-known") : "") +
+    `</svg>` +
+    `<div class="chart-legend"><span class="key key-known"></span>Known words` +
+    `<span class="key key-seen"></span>Words encountered</div>`;
+}
+
+// ---------- HSK bands (existing) ----------
 
 let activeBand = null;
 
@@ -52,9 +179,6 @@ async function openBand(band, scroll = true, showLoading = true) {
   activeBand = band;
   const card = document.getElementById("missing-card");
   card.style.display = "block";
-  // Only show the (page-collapsing) loading placeholder when first opening a
-  // band — on an in-place refresh after marking a word, replacing it would
-  // shrink the page and yank the scroll position to the top.
   if (showLoading) document.getElementById("missing-list").innerHTML = '<p class="muted-line">Loading…</p>';
   const res = await api(`/api/hsk/missing?band=${band}&limit=80`);
   document.getElementById("missing-title").textContent = `HSK ${res.label} — words to learn`;
@@ -78,11 +202,12 @@ async function openBand(band, scroll = true, showLoading = true) {
 async function markWord(word, status) {
   const y = window.scrollY;
   await api("/api/words/status", { method: "POST", body: JSON.stringify({ word, status }) });
-  await loadProgress();
+  await Promise.all([loadProgress(), loadTimeline()]);
   if (activeBand != null) await openBand(activeBand, false, false);
   window.scrollTo(0, y);
 }
 
+loadTimeline();
 loadProgress();
 </script>
 </body>
