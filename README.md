@@ -84,13 +84,19 @@ if a source (like BBC Chinese) returns Traditional characters.
   (sticky at the top) for side-by-side watching. Clicking a line's timestamp seeks
   the embedded player to that moment. The player has keyboard control disabled
   (`disablekb`), so pressing 1/2/3 to mark words never accidentally jumps the video.
-- **Comprehension questions** — the reader's "Generate comprehension questions"
-  button asks Claude (`claude-opus-4-8`, via `_text_plain_content` →
-  `/api/texts/{id}/questions`) for 4 questions about the text, each with a
-  reveal-able reference answer. Requires `ANTHROPIC_API_KEY` in the server's
-  environment; without it the button reports that cleanly. Set it before launching,
-  e.g. in PowerShell `setx ANTHROPIC_API_KEY "sk-ant-..."` (new terminal after), or
-  add it to `start_server.bat`.
+- **Comprehension questions (multiple choice)** — each text can hold a set of
+  saved multiple-choice questions, rendered as clickable options that show
+  ✓/✗ instantly. Two ways to add them, both feeding the same store:
+  - **Paste in (no API key)** — "Add / paste questions" opens an editor. "Copy a
+    prompt…" puts a ready-made prompt (with the text embedded) on your clipboard;
+    paste it into any chatbot, then paste the JSON it returns back in and Save.
+    JSON shape: `[{"question":"…","choices":["…","…","…","…"],"answer":0}]` where
+    `answer` is the 0-based index of the correct choice.
+  Questions are stored per text in the `comprehension_questions` table and
+  served by `GET`/`PUT`/`DELETE /api/texts/{id}/questions`. An optional LLM path
+  (`POST /api/texts/{id}/questions/generate`, requires `ANTHROPIC_API_KEY`) can
+  generate and save questions too, but there's no UI button for it right now —
+  the paste flow is the supported path.
 - **Edits keep your place** — splitting/merging a word re-segments without yanking
   the page: it preserves your scroll position and re-selects the exact instance you
   edited (matched by character offset), not the first occurrence in the text.
@@ -140,6 +146,16 @@ overrides it.
 The list is served by `GET /api/words` (with `q`/`status`/`synced`/`custom`/`sort`/
 `limit`/`offset`), edits by `POST /api/words/{word}`, and reverts by
 `DELETE /api/words/{word}/custom`.
+
+### Seen counts
+
+`seen_count` is the cumulative number of times a word has appeared across all
+texts. It's tallied **once, when a text is added** (`_record_text_occurrences` in
+`backend/main.py`, backed by the `text_word_counts` table) — not on every reader
+open, so re-reading a text never inflates the figure. Deleting a text does **not**
+decrement it: the exposure already happened, so the count persists. To recompute
+the totals from the texts currently stored (e.g. after a bulk import), call
+`rebuild_seen_counts(conn)`.
 
 ## Fixing segmentation & missing words
 

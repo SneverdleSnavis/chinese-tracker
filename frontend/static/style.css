@@ -209,6 +209,10 @@ th { color: var(--muted); font-weight: 600; }
 
 /* Comprehension questions */
 #questions-bar { margin-bottom: 1rem; }
+.q-controls { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+.q-controls strong { margin-right: auto; color: var(--muted); }
+#paste-area { margin-top: 0.75rem; }
+#paste-area textarea { font-family: monospace; font-size: 0.8rem; }
 .q-item {
   border-left: 3px solid var(--accent);
   padding: 0.4rem 0.75rem;
@@ -216,7 +220,20 @@ th { color: var(--muted); font-weight: 600; }
   background: var(--panel);
   border-radius: 0 6px 6px 0;
 }
-.q-q { font-size: 1.15rem; margin-bottom: 0.3rem; }
+.q-q { font-size: 1.15rem; margin-bottom: 0.5rem; }
+.q-choices { display: flex; flex-direction: column; gap: 0.4rem; }
+.q-choice {
+  background: #11141a;
+  border: 1px solid var(--border);
+  color: var(--text);
+  text-align: left;
+  font-size: 1rem;
+  padding: 0.45rem 0.7rem;
+}
+.q-choice:hover:not(:disabled) { border-color: var(--accent); }
+.q-choice:disabled { cursor: default; opacity: 1; }
+.q-choice.correct { border-color: var(--known); background: rgba(46,125,50,0.25); color: #8fd694; }
+.q-choice.wrong { border-color: var(--danger); background: rgba(224,82,82,0.2); color: #f0a0a0; }
 .q-a { color: var(--known); margin-top: 0.4rem; font-size: 1.05rem; }
 .q-status { color: var(--muted); font-size: 0.9rem; }
 .link-btn {

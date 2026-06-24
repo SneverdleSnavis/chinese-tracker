@@ -13,7 +13,22 @@
     <div id="video-container"></div>
     <div id="right-col">
       <div id="questions-bar">
-        <button id="gen-questions" class="secondary">Generate comprehension questions</button>
+        <div class="q-controls">
+          <strong>Comprehension</strong>
+          <button id="toggle-paste" class="secondary">✎ Add / paste questions</button>
+        </div>
+        <div id="paste-area" style="display:none;">
+          <p class="q-status">
+            Paste a JSON array of multiple-choice questions, then Save.
+            <button id="copy-prompt" class="link-btn">Copy a prompt to generate them in any chatbot</button>
+          </p>
+          <textarea id="paste-json" rows="8" placeholder='[{"question":"…", "choices":["A","B","C","D"], "answer":0}]'></textarea>
+          <div class="edit-row">
+            <button id="save-questions">Save questions</button>
+            <button id="clear-questions" class="danger">Clear all</button>
+          </div>
+          <p id="paste-msg" class="q-status"></p>
+        </div>
         <div id="questions"></div>
       </div>
       <div class="reader-text" id="text"></div>
@@ -34,6 +49,11 @@ const wordSpans = [];       // all Chinese-word spans, in reading order
 let currentIndex = -1;      // index into wordSpans of the selected word
 let ytPlayer = null;        // embedded YouTube player (subtitle texts)
 let videoEmbeddable = false;
+let textPlain = "";         // plain text of the current text, for the chatbot prompt
+
+function esc(s) {
+  return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
 
 function youtubeId(url) {
   if (!url) return null;
@@ -335,9 +355,12 @@ async function load(opts = {}) {
   if (text.kind === "subtitle") {
     container.classList.add("subtitle-mode");
     renderSubtitles(container, text);
+    textPlain = text.lines.map((l) => l.tokens.map((t) => t.text).join("")).join("\n");
   } else {
     renderArticle(container, text);
+    textPlain = text.tokens.map((t) => t.text).join("");
   }
+  loadQuestions();
 
   // After a split/merge edit, re-select the affected word WITHOUT jumping the
   // page: prefer the exact instance (same character offset), then restore the
@@ -352,35 +375,106 @@ async function load(opts = {}) {
   if (scrollY != null) window.scrollTo(0, scrollY);
 }
 
-document.getElementById("gen-questions").addEventListener("click", async () => {
-  const btn = document.getElementById("gen-questions");
+// ----- Comprehension: stored multiple-choice questions -----
+
+function renderQuestions(questions) {
   const out = document.getElementById("questions");
-  btn.disabled = true;
-  out.innerHTML = '<p class="q-status">Generating questions…</p>';
+  if (!questions || !questions.length) {
+    out.innerHTML = "";
+    return;
+  }
+  out.innerHTML = questions.map((q, i) => `
+    <div class="q-item" data-answer="${q.answer}">
+      <div class="q-q">${i + 1}. ${esc(q.question)}</div>
+      <div class="q-choices">
+        ${q.choices.map((c, ci) =>
+          `<button class="q-choice" data-i="${ci}">${String.fromCharCode(65 + ci)}. ${esc(c)}</button>`
+        ).join("")}
+      </div>
+    </div>`).join("");
+  out.querySelectorAll(".q-item").forEach((item) => {
+    const ans = parseInt(item.dataset.answer, 10);
+    item.querySelectorAll(".q-choice").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const chosen = parseInt(btn.dataset.i, 10);
+        item.querySelectorAll(".q-choice").forEach((b) => {
+          b.classList.remove("correct", "wrong");
+          b.disabled = true;
+          if (parseInt(b.dataset.i, 10) === ans) b.classList.add("correct");
+        });
+        if (chosen !== ans) btn.classList.add("wrong");
+      });
+    });
+  });
+}
+
+async function loadQuestions() {
   try {
-    const res = await api(`/api/texts/${textId}/questions`, { method: "POST" });
-    out.innerHTML = res.questions.map((q, i) => `
-      <div class="q-item">
-        <div class="q-q">${i + 1}. ${q.question}</div>
-        <button class="link-btn" data-reveal="${i}">Show answer</button>
-        <div class="q-a" id="q-a-${i}" style="display:none;">${q.answer}</div>
-      </div>`).join("");
-    out.querySelectorAll("[data-reveal]").forEach((b) =>
-      b.addEventListener("click", () => {
-        const a = document.getElementById("q-a-" + b.dataset.reveal);
-        const show = a.style.display === "none";
-        a.style.display = show ? "block" : "none";
-        b.textContent = show ? "Hide answer" : "Show answer";
-      }));
+    const res = await api(`/api/texts/${textId}/questions`);
+    renderQuestions(res.questions);
+    // Pre-fill the editor with the current questions so they're easy to tweak.
+    if (res.questions.length) {
+      document.getElementById("paste-json").value = JSON.stringify(res.questions, null, 2);
+    }
+  } catch (e) { /* leave empty */ }
+}
+
+document.getElementById("toggle-paste").addEventListener("click", () => {
+  const area = document.getElementById("paste-area");
+  area.style.display = area.style.display === "none" ? "block" : "none";
+});
+
+document.getElementById("copy-prompt").addEventListener("click", async () => {
+  const prompt =
+    "You are a Mandarin Chinese reading-comprehension tutor. Read the Chinese text below and " +
+    "write 4 multiple-choice questions in simplified Chinese (mix literal recall and light " +
+    "inference). Each question has exactly 4 short choices in simplified Chinese, with one " +
+    "correct. Output ONLY a JSON array — no markdown, no commentary — in exactly this shape:\n" +
+    '[{"question":"…","choices":["…","…","…","…"],"answer":0}]\n' +
+    'where "answer" is the 0-based index of the correct choice.\n\nText:\n' + textPlain;
+  try {
+    await navigator.clipboard.writeText(prompt);
+    setMsg("Prompt copied — paste it into any chatbot, then paste its JSON back here.");
   } catch (e) {
-    const msg = e.message.includes("503")
-      ? "Comprehension questions need an ANTHROPIC_API_KEY set on the server."
-      : "Error: " + e.message;
-    out.innerHTML = `<p class="q-status">${msg}</p>`;
-  } finally {
-    btn.disabled = false;
+    setMsg("Couldn't access the clipboard; select the prompt manually below.");
+    document.getElementById("paste-json").value = prompt;
   }
 });
+
+document.getElementById("save-questions").addEventListener("click", async () => {
+  const raw = document.getElementById("paste-json").value.trim();
+  if (!raw) { setMsg("Paste some JSON first."); return; }
+  let questions;
+  try {
+    questions = JSON.parse(raw);
+    if (!Array.isArray(questions)) throw new Error("expected a JSON array");
+  } catch (e) {
+    setMsg("That isn't valid JSON: " + e.message);
+    return;
+  }
+  try {
+    const res = await api(`/api/texts/${textId}/questions`, {
+      method: "PUT",
+      body: JSON.stringify({ questions }),
+    });
+    renderQuestions(res.questions);
+    setMsg(`Saved ${res.questions.length} question(s).`);
+    document.getElementById("paste-area").style.display = "none";
+  } catch (e) {
+    setMsg("Error: " + e.message);
+  }
+});
+
+document.getElementById("clear-questions").addEventListener("click", async () => {
+  await api(`/api/texts/${textId}/questions`, { method: "DELETE" });
+  document.getElementById("questions").innerHTML = "";
+  document.getElementById("paste-json").value = "";
+  setMsg("Cleared.");
+});
+
+function setMsg(text) {
+  document.getElementById("paste-msg").textContent = text;
+}
 
 load();
 </script>

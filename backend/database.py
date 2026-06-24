@@ -68,6 +68,31 @@ CREATE TABLE IF NOT EXISTS segmentation_overrides (
     created_at TEXT NOT NULL,
     UNIQUE(kind, word)
 );
+
+-- Multiple-choice comprehension questions per text. Either pasted in (as JSON,
+-- generated in any chatbot) or produced by the optional Claude endpoint. choices
+-- is a JSON array of strings; answer is the 0-based index of the correct choice.
+CREATE TABLE IF NOT EXISTS comprehension_questions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    text_id INTEGER NOT NULL REFERENCES texts(id) ON DELETE CASCADE,
+    idx INTEGER NOT NULL,
+    question TEXT NOT NULL,
+    choices TEXT NOT NULL,
+    answer INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_comprehension_text ON comprehension_questions(text_id, idx);
+
+-- How many times each word occurs in each text. Written once when a text is
+-- added (not on every read), and summed into words.seen_count. Keeping the
+-- per-text contribution lets us re-count a re-segmented text without double
+-- counting, and rebuild the totals from scratch.
+CREATE TABLE IF NOT EXISTS text_word_counts (
+    text_id INTEGER NOT NULL REFERENCES texts(id) ON DELETE CASCADE,
+    word TEXT NOT NULL,
+    count INTEGER NOT NULL,
+    PRIMARY KEY (text_id, word)
+);
 """
 
 # Columns added after the original schema shipped; applied idempotently in init_db.

@@ -278,21 +278,54 @@ def _format_entries(entries):
     return pinyin, definition
 
 
-def _record_word_seen(conn, word: str, pinyin: str = "", definition: str = ""):
+def _record_text_occurrences(conn, text_id: int, content: str):
+    """Fold a text's word occurrences into words.seen_count ONCE, when the text
+    is added. seen_count is therefore the cumulative number of times a word has
+    appeared across all texts — it is NOT re-counted when a text is re-opened,
+    and NOT decremented when a text is deleted (the exposure already happened).
+    text_word_counts records each text's contribution so re-counting a
+    re-segmented text replaces its old contribution instead of stacking."""
+    from collections import Counter
+    counts = Counter(t["text"] for t in segment(content) if t["is_chinese"])
     ts = now()
-    existing = conn.execute("SELECT word, seen_count FROM words WHERE word = ?", (word,)).fetchone()
-    if existing:
+    for word, count in counts.items():
+        prev = conn.execute(
+            "SELECT count FROM text_word_counts WHERE text_id = ? AND word = ?",
+            (text_id, word),
+        ).fetchone()
+        delta = count - (prev["count"] if prev else 0)
+        if delta == 0:
+            continue
         conn.execute(
-            "UPDATE words SET seen_count = seen_count + 1, last_seen = ?, "
-            "pinyin = COALESCE(pinyin, ?), definition = COALESCE(definition, ?) WHERE word = ?",
-            (ts, pinyin, definition, word),
+            "INSERT INTO text_word_counts (text_id, word, count) VALUES (?, ?, ?) "
+            "ON CONFLICT(text_id, word) DO UPDATE SET count = excluded.count",
+            (text_id, word, count),
         )
-    else:
-        conn.execute(
-            "INSERT INTO words (word, status, pinyin, definition, seen_count, first_seen, last_seen) "
-            "VALUES (?, 'unknown', ?, ?, 1, ?, ?)",
-            (word, pinyin, definition, ts, ts),
-        )
+        existing = conn.execute("SELECT word FROM words WHERE word = ?", (word,)).fetchone()
+        if existing:
+            conn.execute(
+                "UPDATE words SET seen_count = seen_count + ?, last_seen = ? WHERE word = ?",
+                (delta, ts, word),
+            )
+        else:
+            pinyin, definition, _ = _effective_entry(conn, word)
+            conn.execute(
+                "INSERT INTO words (word, status, pinyin, definition, seen_count, first_seen, last_seen) "
+                "VALUES (?, 'unknown', ?, ?, ?, ?, ?)",
+                (word, pinyin, definition, count, ts, ts),
+            )
+
+
+def rebuild_seen_counts(conn):
+    """Recompute every word's seen_count from the texts currently stored. Zeroes
+    the per-text contributions and seen_count, then re-counts each text. Used as
+    a one-time migration off the old count-on-every-open behaviour, and safe to
+    run again any time the totals look off."""
+    load_overrides(conn)
+    conn.execute("DELETE FROM text_word_counts")
+    conn.execute("UPDATE words SET seen_count = 0")
+    for r in conn.execute("SELECT id, content FROM texts").fetchall():
+        _record_text_occurrences(conn, r["id"], r["content"])
 
 
 # ---------- Texts / Reading ----------
@@ -312,6 +345,7 @@ def create_text(body: TextCreate):
             "INSERT INTO texts (title, source, content, created_at) VALUES (?, ?, ?, ?)",
             (title, body.source, content, now()),
         )
+        _record_text_occurrences(conn, cur.lastrowid, content)
         return {"id": cur.lastrowid}
 
 
@@ -358,9 +392,11 @@ def _custom_defs(conn, words):
     return {r["word"]: {"pinyin": r["pinyin"] or "", "definition": r["definition"], "source": "custom"} for r in rows}
 
 
-def _tokenize_with_status(conn, content: str, record_seen: bool = True):
-    """Segment text, attach each Chinese token's known/learning/unknown status,
-    and (optionally) bump its seen-count. Shared by article and subtitle reading."""
+def _tokenize_with_status(conn, content: str):
+    """Segment text and attach each Chinese token's known/learning/unknown status
+    plus its definition. Shared by article and subtitle reading. Does NOT touch
+    seen-counts — those are recorded once when a text is added (see
+    _record_text_occurrences), so re-opening a text never inflates them."""
     tokens = segment(content)
     chinese_words = {t["text"] for t in tokens if t["is_chinese"]}
     words_status = {}
@@ -381,9 +417,6 @@ def _tokenize_with_status(conn, content: str, record_seen: bool = True):
             tok["status"] = words_status.get(tok["text"], "unknown")
             if tok["text"] in custom:
                 tok["entries"] = [custom[tok["text"]]]
-            if record_seen:
-                pinyin, definition = _format_entries(tok["entries"])
-                _record_word_seen(conn, tok["text"], pinyin, definition)
     return tokens
 
 
@@ -444,6 +477,7 @@ def _save_subtitle_text(conn, title, cues, source=None, video_url=None):
             "VALUES (?, ?, ?, ?, ?)",
             (text_id, i, c.get("start_ms"), c.get("end_ms"), to_simplified(c["text"])),
         )
+    _record_text_occurrences(conn, text_id, joined)
     return text_id
 
 
@@ -675,15 +709,16 @@ def analytics_summary():
         }
 
 
-# ---------- Comprehension questions (LLM) ----------
+# ---------- Comprehension questions (multiple choice) ----------
 
-class ComprehensionQuestion(BaseModel):
-    question: str   # in simplified Chinese
-    answer: str     # concise reference answer in simplified Chinese
+class MCQuestion(BaseModel):
+    question: str         # in simplified Chinese
+    choices: list[str]    # 2+ answer options
+    answer: int           # 0-based index of the correct choice
 
 
-class ComprehensionQuestions(BaseModel):
-    questions: list[ComprehensionQuestion]
+class MCQuestions(BaseModel):
+    questions: list[MCQuestion]
 
 
 def _text_plain_content(conn, text_id: int):
@@ -701,13 +736,84 @@ def _text_plain_content(conn, text_id: int):
     return row["title"], content
 
 
-@app.post("/api/texts/{text_id}/questions")
-def comprehension_questions(text_id: int):
-    """Generate reading-comprehension questions for a text via Claude. Requires
-    ANTHROPIC_API_KEY in the environment."""
+def _stored_questions(conn, text_id: int):
+    """Return the saved multiple-choice questions for a text, ordered."""
+    rows = conn.execute(
+        "SELECT id, question, choices, answer FROM comprehension_questions "
+        "WHERE text_id = ? ORDER BY idx",
+        (text_id,),
+    ).fetchall()
+    import json
+    return [
+        {"id": r["id"], "question": r["question"], "choices": json.loads(r["choices"]), "answer": r["answer"]}
+        for r in rows
+    ]
+
+
+def _save_questions(conn, text_id: int, questions):
+    """Replace the stored questions for a text with `questions` (list of dicts
+    with question/choices/answer). Validates shape and the answer index."""
+    import json
+    clean = []
+    for q in questions:
+        question = (q.get("question") or "").strip()
+        choices = [str(c).strip() for c in (q.get("choices") or []) if str(c).strip()]
+        answer = q.get("answer")
+        if not question or len(choices) < 2:
+            raise HTTPException(400, "each question needs a 'question' and at least 2 'choices'")
+        if not isinstance(answer, int) or not (0 <= answer < len(choices)):
+            raise HTTPException(400, f"'answer' must be a 0-based index into choices (0–{len(choices)-1})")
+        clean.append({"question": question, "choices": choices, "answer": answer})
+    ts = now()
+    conn.execute("DELETE FROM comprehension_questions WHERE text_id = ?", (text_id,))
+    for i, q in enumerate(clean):
+        conn.execute(
+            "INSERT INTO comprehension_questions (text_id, idx, question, choices, answer, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (text_id, i, q["question"], json.dumps(q["choices"], ensure_ascii=False), q["answer"], ts),
+        )
+    return clean
+
+
+class QuestionsPayload(BaseModel):
+    questions: list[dict]
+
+
+@app.get("/api/texts/{text_id}/questions")
+def get_questions(text_id: int):
+    """Fetch the saved multiple-choice questions for a text."""
+    with db() as conn:
+        return {"questions": _stored_questions(conn, text_id)}
+
+
+@app.put("/api/texts/{text_id}/questions")
+def put_questions(text_id: int, body: QuestionsPayload):
+    """Save (replace) the multiple-choice questions for a text — used by the
+    paste-in flow. Expects a list of {question, choices, answer}."""
+    with db() as conn:
+        row = conn.execute("SELECT id FROM texts WHERE id = ?", (text_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "text not found")
+        saved = _save_questions(conn, text_id, body.questions)
+    return {"questions": saved}
+
+
+@app.delete("/api/texts/{text_id}/questions")
+def clear_questions(text_id: int):
+    """Remove all saved questions for a text."""
+    with db() as conn:
+        conn.execute("DELETE FROM comprehension_questions WHERE text_id = ?", (text_id,))
+    return {"ok": True}
+
+
+@app.post("/api/texts/{text_id}/questions/generate")
+def generate_questions(text_id: int):
+    """Generate multiple-choice questions for a text via Claude and save them.
+    Optional path — requires ANTHROPIC_API_KEY. The paste-in flow (PUT above)
+    needs no key."""
     import os
     if not os.environ.get("ANTHROPIC_API_KEY"):
-        raise HTTPException(503, "ANTHROPIC_API_KEY is not set. Add it to the server's environment to enable comprehension questions.")
+        raise HTTPException(503, "ANTHROPIC_API_KEY is not set. You can paste questions in instead — no key needed.")
     with db() as conn:
         title, content = _text_plain_content(conn, text_id)
     if content is None:
@@ -720,10 +826,10 @@ def comprehension_questions(text_id: int):
     client = anthropic.Anthropic()
     system = (
         "You are a Mandarin Chinese reading-comprehension tutor. Given a Chinese text, "
-        "write 4 comprehension questions in simplified Chinese that check whether a learner "
-        "understood it — mixing literal recall and light inference. Keep each question short. "
-        "Provide a concise reference answer in simplified Chinese for each. Do not add pinyin "
-        "or translations."
+        "write 4 multiple-choice questions in simplified Chinese that check whether a learner "
+        "understood it — mixing literal recall and light inference. Each question has exactly 4 "
+        "choices in simplified Chinese, with one correct. 'answer' is the 0-based index of the "
+        "correct choice. Keep questions and choices short. Do not add pinyin or translations."
     )
     try:
         response = client.messages.parse(
@@ -731,11 +837,14 @@ def comprehension_questions(text_id: int):
             max_tokens=4000,
             system=system,
             messages=[{"role": "user", "content": f"Text title: {title}\n\nText:\n{content}"}],
-            output_format=ComprehensionQuestions,
+            output_format=MCQuestions,
         )
     except anthropic.APIStatusError as e:
         raise HTTPException(502, f"Claude API error: {e.message}")
-    return response.parsed_output
+    parsed = response.parsed_output
+    with db() as conn:
+        saved = _save_questions(conn, text_id, [q.model_dump() for q in parsed.questions])
+    return {"questions": saved}
 
 
 # ---------- Anki integration ----------
