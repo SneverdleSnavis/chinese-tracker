@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Reading — Chinese Tracker</title>
+<link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+<div id="nav"></div>
+<main>
+  <h1 id="title"></h1>
+  <div class="reader-text" id="text"></div>
+</main>
+<div id="lookup-panel">
+  <div class="placeholder">Click a word — or use ← → to move between words. Press 1 = known, 2 = learning, 3 = unknown.</div>
+</div>
+
+<script src="/static/app.js"></script>
+<script>
+document.getElementById("nav").innerHTML = navHtml("/read");
+
+const textId = location.pathname.split("/").pop();
+let activeTokenEl = null;
+const wordSpans = [];       // all Chinese-word spans, in reading order
+let currentIndex = -1;      // index into wordSpans of the selected word
+
+function hasRealEntry(entries) {
+  return entries && entries.length > 0;
+}
+
+function renderEntries(entries) {
+  if (!hasRealEntry(entries)) {
+    return `<div class="definition" style="color:var(--muted);">No dictionary entry found — add one below.</div>`;
+  }
+  return entries
+    .slice(0, 3)
+    .map((e) => `<div class="definition"><span class="pinyin">${e.pinyin}</span> — ${e.definition}${e.source === "custom" ? ' <span class="status-badge learning" style="font-size:0.6rem;">custom</span>' : ""}</div>`)
+    .join("");
+}
+
+function editControls(word) {
+  const nextSpan = wordSpans[currentIndex + 1];
+  const canMerge = currentIndex >= 0 && nextSpan;
+  return `<div class="edit-row">
+    ${word.length > 1 ? `<button class="secondary" onclick="splitWord()">✂ Split into characters</button>` : ""}
+    ${canMerge ? `<button class="secondary" onclick="mergeNext()">Merge with «${nextSpan.dataset.word}» →</button>` : ""}
+    <button class="secondary" onclick="toggleDefForm()">✎ Define</button>
+  </div>
+  <div id="def-form" style="display:none; margin-top:0.5rem;">
+    <div style="display:flex; gap:0.5rem; align-items:center;">
+      <input id="def-pinyin" placeholder="pinyin (auto)" style="max-width:140px;" />
+      <input id="def-meaning" placeholder="definition / meaning" />
+      <button onclick="saveDefinition()" style="white-space:nowrap;">Save</button>
+    </div>
+  </div>`;
+}
+
+function showLookup(word, entries, status) {
+  const panel = document.getElementById("lookup-panel");
+  const pinyin = entries[0] ? entries[0].pinyin : "";
+  panel.innerHTML = `
+    <span class="word">${word}</span>
+    <span class="pinyin">${pinyin}</span>
+    <span class="status-badge ${status}" style="margin-left:0.5rem;">${status}</span>
+    ${renderEntries(entries)}
+    <div class="actions">
+      <button data-status="known" onclick="setStatus('${word}','known')">Known <kbd>1</kbd></button>
+      <button data-status="learning" onclick="setStatus('${word}','learning')">Learning <kbd>2</kbd></button>
+      <button data-status="unknown" class="secondary" onclick="setStatus('${word}','unknown')">Unknown <kbd>3</kbd></button>
+    </div>
+    ${editControls(word)}
+  `;
+  // If the word has no real definition, open the define form pre-filled.
+  if (!hasRealEntry(entries)) toggleDefForm(true);
+}
+
+function toggleDefForm(forceOpen) {
+  const form = document.getElementById("def-form");
+  if (!form) return;
+  const open = forceOpen === true ? true : form.style.display === "none";
+  form.style.display = open ? "block" : "none";
+  if (open && activeTokenEl) {
+    const meaning = document.getElementById("def-meaning");
+    const pin = document.getElementById("def-pinyin");
+    const entries = JSON.parse(activeTokenEl.dataset.entries || "[]");
+    if (entries[0]) { pin.value = entries[0].pinyin || ""; meaning.value = entries[0].definition || ""; }
+    // Fetch a suggested pinyin for undefined words.
+    if (!pin.value) {
+      api(`/api/lookup?word=${encodeURIComponent(activeTokenEl.dataset.word)}`)
+        .then((d) => { if (!pin.value) pin.value = d.suggested_pinyin || ""; });
+    }
+    meaning.focus();
+  }
+}
+
+async function saveDefinition() {
+  if (!activeTokenEl) return;
+  const word = activeTokenEl.dataset.word;
+  const pinyin = document.getElementById("def-pinyin").value.trim();
+  const definition = document.getElementById("def-meaning").value.trim();
+  if (!definition) return;
+  const res = await api("/api/custom-definition", {
+    method: "POST",
+    body: JSON.stringify({ word, pinyin, definition }),
+  });
+  // Update every span of this word so the new definition is live everywhere.
+  document.querySelectorAll(`.tok[data-word="${word}"]`).forEach((el) => {
+    el.dataset.entries = JSON.stringify(res.entries);
+  });
+  showLookup(word, res.entries, spanStatus(activeTokenEl));
+}
+
+async function splitWord() {
+  if (!activeTokenEl) return;
+  const word = activeTokenEl.dataset.word;
+  const res = await api("/api/segmentation/override", {
+    method: "POST",
+    body: JSON.stringify({ action: "split", word }),
+  });
+  await load(res.new_word);
+}
+
+async function mergeNext() {
+  if (!activeTokenEl) return;
+  const nextSpan = wordSpans[currentIndex + 1];
+  if (!nextSpan) return;
+  const res = await api("/api/segmentation/override", {
+    method: "POST",
+    body: JSON.stringify({ action: "merge", word: activeTokenEl.dataset.word, next_word: nextSpan.dataset.word }),
+  });
+  await load(res.new_word);
+}
+
+async function setStatus(word, status) {
+  await api("/api/words/status", {
+    method: "POST",
+    body: JSON.stringify({ word, status }),
+  });
+  document.querySelectorAll(`.tok[data-word="${word}"]`).forEach((el) => {
+    el.classList.remove("known", "learning", "unknown");
+    el.classList.add(status);
+  });
+  if (activeTokenEl) {
+    const entries = JSON.parse(activeTokenEl.dataset.entries || "[]");
+    showLookup(word, entries, status);
+  }
+}
+
+function spanStatus(span) {
+  return span.classList.contains("known") ? "known"
+    : span.classList.contains("learning") ? "learning" : "unknown";
+}
+
+function selectSpan(span, { scroll = false } = {}) {
+  if (activeTokenEl) activeTokenEl.classList.remove("active");
+  activeTokenEl = span;
+  span.classList.add("active");
+  currentIndex = wordSpans.indexOf(span);
+  const entries = JSON.parse(span.dataset.entries || "[]");
+  showLookup(span.dataset.word, entries, spanStatus(span));
+  if (scroll) span.scrollIntoView({ block: "center", behavior: "smooth" });
+  api("/api/lookups", {
+    method: "POST",
+    body: JSON.stringify({ word: span.dataset.word, text_id: parseInt(textId) }),
+  });
+}
+
+function renderToken(tok) {
+  if (!tok.is_chinese) {
+    return document.createTextNode(tok.text);
+  }
+  const span = document.createElement("span");
+  span.className = `tok ${tok.status}`;
+  span.textContent = tok.text;
+  span.dataset.word = tok.text;
+  span.dataset.entries = JSON.stringify(tok.entries);
+  span.addEventListener("click", () => selectSpan(span));
+  wordSpans.push(span);
+  return span;
+}
+
+function formatTime(ms) {
+  if (ms == null) return "";
+  const total = Math.floor(ms / 1000);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+function renderArticle(container, text) {
+  text.tokens.forEach((tok) => container.appendChild(renderToken(tok)));
+}
+
+function renderSubtitles(container, text) {
+  text.lines.forEach((line) => {
+    const row = document.createElement("div");
+    row.className = "sub-line";
+
+    const ts = document.createElement("span");
+    ts.className = "sub-time";
+    ts.textContent = formatTime(line.start_ms);
+    if (text.video_url && line.start_ms != null) {
+      const secs = Math.floor(line.start_ms / 1000);
+      const link = document.createElement("a");
+      link.href = `${text.video_url}&t=${secs}s`;
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.textContent = formatTime(line.start_ms);
+      link.title = "Open video at this moment";
+      ts.textContent = "";
+      ts.appendChild(link);
+    }
+    row.appendChild(ts);
+
+    const body = document.createElement("span");
+    body.className = "sub-body";
+    line.tokens.forEach((tok) => body.appendChild(renderToken(tok)));
+    row.appendChild(body);
+
+    container.appendChild(row);
+  });
+}
+
+function moveSelection(delta) {
+  if (wordSpans.length === 0) return;
+  let next = currentIndex + delta;
+  if (currentIndex === -1) next = delta > 0 ? 0 : wordSpans.length - 1;
+  next = Math.max(0, Math.min(wordSpans.length - 1, next));
+  selectSpan(wordSpans[next], { scroll: true });
+}
+
+const KEY_TO_STATUS = { "1": "known", "2": "learning", "3": "unknown" };
+
+document.addEventListener("keydown", (e) => {
+  const tag = (e.target && e.target.tagName) || "";
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+  if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+    e.preventDefault();
+    moveSelection(1);
+  } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+    e.preventDefault();
+    moveSelection(-1);
+  } else if (KEY_TO_STATUS[e.key] && activeTokenEl) {
+    e.preventDefault();
+    setStatus(activeTokenEl.dataset.word, KEY_TO_STATUS[e.key]).then(() => {
+      if (currentIndex < wordSpans.length - 1) moveSelection(1);
+    });
+  }
+});
+
+async function load(selectWord) {
+  const text = await api(`/api/texts/${textId}`);
+  document.getElementById("title").textContent = text.title;
+  const container = document.getElementById("text");
+  container.innerHTML = "";
+  wordSpans.length = 0;
+  currentIndex = -1;
+  activeTokenEl = null;
+
+  if (text.kind === "subtitle") {
+    container.classList.add("subtitle-mode");
+    renderSubtitles(container, text);
+  } else {
+    renderArticle(container, text);
+  }
+
+  // After a split/merge edit, re-select the affected word and show its lookup.
+  if (selectWord) {
+    const span = wordSpans.find((s) => s.dataset.word === selectWord);
+    if (span) selectSpan(span, { scroll: true });
+  }
+}
+
+load();
+</script>
+</body>
+</html>

@@ -1,0 +1,94 @@
+# Chinese Learning Tracker
+
+Local-first Mandarin study tool: word-status tracking (unknown/learning/known),
+a reader with click-to-lookup (jieba segmentation + CC-CEDICT), an analytics
+dashboard, and two-way Anki sync via AnkiConnect.
+
+## Setup
+
+```
+python -m venv venv
+venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+CC-CEDICT is already downloaded to `backend/data/cedict.txt`. If missing, fetch it from
+https://www.mdbg.net/chinese/dictionary?page=cc-cedict and extract to that path.
+
+## Run
+
+```
+venv\Scripts\activate
+uvicorn main:app --app-dir backend --port 8000
+```
+
+Open http://localhost:8000
+
+## Anki sync
+
+Requires Anki desktop running with the [AnkiConnect](https://ankiweb.net/shared/info/2055492159)
+add-on installed. The dashboard's Anki Sync panel lets you:
+- **Import known words**: pull existing notes from a deck and mark those words "known" here.
+- **Export learning words**: push words you've marked "learning" here as new Anki cards.
+
+## How it's organized
+
+- `backend/` — FastAPI app, SQLite storage (`backend/data/app.db`), jieba segmentation,
+  CC-CEDICT lookup, AnkiConnect client.
+- `frontend/` — plain HTML/CSS/JS: dashboard (`index.html`), text list (`read.html`),
+  reader with click-to-lookup (`reader.html`).
+
+## Status colors in the reader
+
+Underline color reflects per-word status: gray = unknown, yellow = learning, green = known.
+Click any Chinese word to see pinyin/definition and change its status.
+
+## Fetching new articles
+
+The Reading page has a "Fetch new articles" panel pulling from:
+- **BBC Chinese (News)** — full article text scraped from the linked page (RSS only gives a teaser).
+- **Mandarin Bean (Graded Readers)** — learner-leveled lessons, extracted to simplified-only text
+  (the source's pinyin/traditional annotations are stripped out).
+
+Each candidate shows a difficulty bar (% known/learning/unknown words, based on your current
+word-status data) before you commit to adding it. Already-imported articles (matched by source
+URL) are filtered out automatically. Source list lives in `backend/fetchers.py` — add an entry
+to `SOURCES` and an extractor function to add more feeds.
+
+All text — pasted, or fetched from any source — is converted to Simplified Chinese via OpenCC
+(`backend/normalize.py`) before it's stored or scored. This keeps word tracking consistent even
+if a source (like BBC Chinese) returns Traditional characters.
+
+## Video / subtitle study
+
+The Reading page has an "Import subtitles" panel:
+- **YouTube URL** — auto-fetches the video's Chinese captions via yt-dlp (prefers manual
+  simplified subs, falls back to auto-generated). Only works if the video has Chinese captions.
+- **File upload** — drop in any `.srt` or `.vtt` file (downloaded shows, movies, subs you grabbed
+  manually).
+
+Imported subtitles open in the reader as timestamped lines with the same click-to-lookup and
+word tracking as articles. For YouTube imports, each timestamp is a link that opens the video at
+that exact moment in a new tab. All text is normalized to simplified on import (`backend/normalize.py`).
+
+Parsing/fetching lives in `backend/subtitles.py`; lines are stored in the `subtitle_lines` table.
+
+## Fixing segmentation & missing words
+
+In the reader, selecting a word reveals edit controls in the lookup panel:
+- **✂ Split into characters** — when jieba wrongly glues characters together, this breaks the
+  word apart. Stored as a global override (`jieba.del_word`) so it stays fixed across all texts.
+- **Merge with «next» →** — joins the selected word with the following one into a single token
+  (`jieba.add_word`), also global and persistent.
+- **✎ Define** — for words CC-CEDICT doesn't cover, add your own definition. Pinyin is
+  auto-suggested via `pypinyin`, so you usually only type the meaning. Custom definitions then
+  appear wherever that word shows up, and are included in the CSV export.
+
+Both kinds of correction persist in the `segmentation_overrides` and `custom_definitions` tables
+and are re-applied to jieba on startup. After an edit the reader re-segments and auto-looks-up the
+affected word.
+
+## Next steps (not yet built)
+
+- Bilibili subtitle import (different caption API than YouTube)
+- Spaced-repetition review built into the site itself, as an alternative to Anki

@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Reading — Chinese Tracker</title>
+<link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+<div id="nav"></div>
+<main>
+  <h1>Reading</h1>
+
+  <div class="card">
+    <h2>Fetch new articles</h2>
+    <div id="fetch-sources" class="field"></div>
+    <button id="run-fetch">Fetch new articles</button>
+    <span id="fetch-status" style="margin-left:0.75rem; color: var(--muted); font-size:0.85rem;"></span>
+    <div id="fetch-results" style="margin-top:1rem;"></div>
+  </div>
+
+  <div class="card">
+    <h2>Import subtitles (video study)</h2>
+    <p style="color: var(--muted); font-size: 0.85rem; margin-top:0;">
+      Turn any show, movie, or YouTube video with Chinese subtitles into study material.
+    </p>
+    <div class="field">
+      <label>YouTube URL (auto-fetches Chinese captions)</label>
+      <div style="display:flex; gap:0.5rem;">
+        <input id="yt-url" placeholder="https://www.youtube.com/watch?v=..." />
+        <button id="yt-import" style="white-space:nowrap;">Import</button>
+      </div>
+    </div>
+    <div class="field">
+      <label>Or upload a subtitle file (.srt / .vtt)</label>
+      <div style="display:flex; gap:0.5rem; align-items:center;">
+        <input type="file" id="sub-file" accept=".srt,.vtt" style="padding:0.35rem;" />
+        <button id="sub-upload" style="white-space:nowrap;">Upload</button>
+      </div>
+    </div>
+    <div id="sub-status" style="color: var(--muted); font-size:0.85rem;"></div>
+  </div>
+
+  <div class="card">
+    <h2>Add a text</h2>
+    <div class="field">
+      <label>Title</label>
+      <input id="title" placeholder="e.g. 三体 chapter 1, or a news article title" />
+    </div>
+    <div class="field">
+      <label>Source (optional)</label>
+      <input id="source" placeholder="URL or note about where this came from" />
+    </div>
+    <div class="field">
+      <label>Content (paste Chinese text here)</label>
+      <textarea id="content" rows="8" placeholder="粘贴中文文本..."></textarea>
+    </div>
+    <button id="add-text">Add Text</button>
+    <span id="add-status" style="margin-left:0.75rem; color: var(--muted); font-size:0.85rem;"></span>
+  </div>
+
+  <div class="card">
+    <h2>Your Texts</h2>
+    <div id="text-list"></div>
+  </div>
+</main>
+
+<script src="/static/app.js"></script>
+<script>
+document.getElementById("nav").innerHTML = navHtml("/read");
+
+async function loadSources() {
+  const sources = await api("/api/fetch/sources");
+  const container = document.getElementById("fetch-sources");
+  container.innerHTML = sources
+    .map(
+      (s) => `<label style="display:flex; align-items:center; gap:0.5rem; font-size:0.9rem; color: var(--text);">
+        <input type="checkbox" class="source-checkbox" value="${s.id}" checked style="width:auto;" />
+        ${s.name} <span class="meta">(${s.difficulty_hint})</span>
+      </label>`
+    )
+    .join("");
+}
+
+function difficultyBar(d) {
+  return `<div style="display:flex; height:8px; border-radius:4px; overflow:hidden; margin:0.4rem 0;">
+    <div style="background:var(--known); width:${d.known_pct}%;"></div>
+    <div style="background:var(--learning); width:${d.learning_pct}%;"></div>
+    <div style="background:var(--unknown); width:${d.unknown_pct}%;"></div>
+  </div>
+  <div class="meta">${d.known_pct}% known &middot; ${d.learning_pct}% learning &middot; ${d.unknown_pct}% unknown &middot; ${d.total_words} words</div>`;
+}
+
+document.getElementById("run-fetch").addEventListener("click", async () => {
+  const ids = Array.from(document.querySelectorAll(".source-checkbox:checked")).map((c) => c.value);
+  const statusEl = document.getElementById("fetch-status");
+  const resultsEl = document.getElementById("fetch-results");
+  if (ids.length === 0) {
+    statusEl.textContent = "Select at least one source.";
+    return;
+  }
+  statusEl.textContent = "Fetching...";
+  resultsEl.innerHTML = "";
+  try {
+    const res = await api("/api/fetch/run", {
+      method: "POST",
+      body: JSON.stringify({ source_ids: ids, limit: 5 }),
+    });
+    statusEl.textContent = `${res.candidates.length} new article(s) found.` +
+      (res.errors.length ? ` ${res.errors.length} source(s) failed.` : "");
+    resultsEl.innerHTML = res.candidates
+      .map(
+        (c, i) => `<div class="card" style="margin-bottom:0.75rem;">
+          <div style="font-weight:600;">${c.title}</div>
+          <div class="meta">${c.source_name}</div>
+          ${difficultyBar(c.difficulty)}
+          <button onclick='addCandidate(${i})'>Add to my texts</button>
+        </div>`
+      )
+      .join("") || `<div class="meta">No new articles found.</div>`;
+    window._candidates = res.candidates;
+  } catch (e) {
+    statusEl.textContent = "Error: " + e.message;
+  }
+});
+
+async function addCandidate(i) {
+  const c = window._candidates[i];
+  const res = await api("/api/texts", {
+    method: "POST",
+    body: JSON.stringify({ title: c.title, content: c.content, source: c.link }),
+  });
+  window.location.href = `/read/${res.id}`;
+}
+
+document.getElementById("yt-import").addEventListener("click", async () => {
+  const url = document.getElementById("yt-url").value.trim();
+  const statusEl = document.getElementById("sub-status");
+  if (!url) { statusEl.textContent = "Paste a YouTube URL first."; return; }
+  statusEl.textContent = "Fetching captions… (this can take 10–20s)";
+  try {
+    const res = await api("/api/subtitles/youtube", {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    });
+    window.location.href = `/read/${res.id}`;
+  } catch (e) {
+    statusEl.textContent = "Error: " + e.message;
+  }
+});
+
+document.getElementById("sub-upload").addEventListener("click", async () => {
+  const fileInput = document.getElementById("sub-file");
+  const statusEl = document.getElementById("sub-status");
+  if (!fileInput.files.length) { statusEl.textContent = "Choose a .srt or .vtt file first."; return; }
+  statusEl.textContent = "Uploading…";
+  const form = new FormData();
+  form.append("file", fileInput.files[0]);
+  try {
+    const res = await fetch("/api/subtitles/upload", { method: "POST", body: form });
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    window.location.href = `/read/${data.id}`;
+  } catch (e) {
+    statusEl.textContent = "Error: " + e.message;
+  }
+});
+
+async function loadTexts() {
+  const texts = await api("/api/texts");
+  const list = document.getElementById("text-list");
+  if (texts.length === 0) {
+    list.innerHTML = `<div class="meta">No texts yet — paste one in above to get started.</div>`;
+    return;
+  }
+  const completions = ["unread", "reading", "read"];
+  list.innerHTML = texts
+    .map(
+      (t) => `<div class="text-card">
+        <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:1rem;">
+          <div style="flex:1;">
+            <a href="/read/${t.id}" style="color: var(--text); text-decoration:none; font-weight:600;">${t.title}</a>
+            ${t.kind === "subtitle" ? '<span class="status-badge learning" style="margin-left:0.4rem;">▶ subtitle</span>' : ""}
+            <div class="meta">${t.difficulty.total_words} words &middot; added ${new Date(t.created_at).toLocaleDateString()}${t.last_read_at ? " &middot; last read " + new Date(t.last_read_at).toLocaleDateString() : ""}</div>
+          </div>
+          <select onchange="setCompletion(${t.id}, this.value)" class="completion-select ${t.completion}" style="width:auto;">
+            ${completions.map((c) => `<option value="${c}" ${t.completion === c ? "selected" : ""}>${c}</option>`).join("")}
+          </select>
+        </div>
+        ${difficultyBar(t.difficulty)}
+        <div style="margin-top:0.6rem;">
+          <button class="danger" onclick="deleteText(${t.id})">Delete</button>
+        </div>
+      </div>`
+    )
+    .join("");
+}
+
+async function setCompletion(id, completion) {
+  await api(`/api/texts/${id}/completion`, {
+    method: "POST",
+    body: JSON.stringify({ completion }),
+  });
+  loadTexts();
+}
+
+async function deleteText(id) {
+  if (!confirm("Delete this text?")) return;
+  await api(`/api/texts/${id}`, { method: "DELETE" });
+  loadTexts();
+}
+
+document.getElementById("add-text").addEventListener("click", async () => {
+  const title = document.getElementById("title").value.trim();
+  const source = document.getElementById("source").value.trim();
+  const content = document.getElementById("content").value.trim();
+  const statusEl = document.getElementById("add-status");
+  if (!title || !content) {
+    statusEl.textContent = "Title and content are required.";
+    return;
+  }
+  statusEl.textContent = "Adding...";
+  try {
+    const res = await api("/api/texts", {
+      method: "POST",
+      body: JSON.stringify({ title, source: source || null, content }),
+    });
+    window.location.href = `/read/${res.id}`;
+  } catch (e) {
+    statusEl.textContent = "Error: " + e.message;
+  }
+});
+
+loadSources();
+loadTexts();
+</script>
+</body>
+</html>

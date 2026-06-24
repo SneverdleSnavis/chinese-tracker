@@ -1,0 +1,14 @@
+venv/
+__pycache__/
+*.pyc
+backend/data/app.db
+backend/data/app.db-journal
+backend/data/app.db-wal
+backend/data/app.db-shm
+backend/data/*.log
+backend/data/backups/
+backend/data/cedict.txt
+backend/data/cedict.txt.gz
+*.json
+!.claude/launch.json
+server.log

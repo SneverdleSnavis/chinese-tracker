@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Dashboard — Chinese Tracker</title>
+<link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+<div id="nav"></div>
+<main>
+  <h1>Learning Dashboard</h1>
+
+  <div class="stats-grid" id="stats"></div>
+
+  <div class="card">
+    <h2>Backup</h2>
+    <p style="color: var(--muted); font-size: 0.85rem; margin-top:0;">
+      Your word list is the data only you generate. Download it as CSV anytime.
+      The server also keeps automatic timestamped database backups on each restart.
+    </p>
+    <a class="btn" href="/api/words/export">Export my words (CSV)</a>
+  </div>
+
+  <div class="card">
+    <h2>Anki Sync</h2>
+    <div id="anki-status">Checking AnkiConnect...</div>
+    <div id="anki-controls" style="display:none; margin-top:0.75rem;">
+      <div class="field">
+        <label>Deck</label>
+        <select id="anki-deck"></select>
+      </div>
+      <div class="actions" style="display:flex; gap:0.5rem;">
+        <button id="import-known">Import known words from this deck</button>
+        <button id="export-learning" class="secondary">Export "learning" words to this deck</button>
+      </div>
+      <div id="anki-result" style="margin-top:0.5rem; color: var(--muted); font-size: 0.85rem;"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Recently Encountered Words</h2>
+    <table id="recent-words">
+      <thead><tr><th>Word</th><th>Status</th><th>Last Seen</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</main>
+
+<script src="/static/app.js"></script>
+<script>
+document.getElementById("nav").innerHTML = navHtml("/");
+
+async function loadStats() {
+  const summary = await api("/api/analytics/summary");
+  const sc = summary.status_counts;
+  const stats = document.getElementById("stats");
+  stats.innerHTML = `
+    <div class="stat known"><div class="num">${sc.known || 0}</div><div class="label">Known</div></div>
+    <div class="stat learning"><div class="num">${sc.learning || 0}</div><div class="label">Learning</div></div>
+    <div class="stat unknown"><div class="num">${sc.unknown || 0}</div><div class="label">Unknown (encountered)</div></div>
+    <div class="stat"><div class="num">${summary.total_texts}</div><div class="label">Texts Read</div></div>
+    <div class="stat"><div class="num">${summary.total_lookups}</div><div class="label">Word Lookups</div></div>
+  `;
+
+  const tbody = document.querySelector("#recent-words tbody");
+  tbody.innerHTML = summary.recent_words
+    .map(
+      (w) => `<tr>
+        <td>${w.word}</td>
+        <td><span class="status-badge ${w.status}">${w.status}</span></td>
+        <td>${new Date(w.last_seen).toLocaleString()}</td>
+      </tr>`
+    )
+    .join("");
+}
+
+async function loadAnki() {
+  const statusEl = document.getElementById("anki-status");
+  const controls = document.getElementById("anki-controls");
+  try {
+    const status = await api("/api/anki/status");
+    if (!status.available) {
+      statusEl.textContent = "AnkiConnect not reachable. Open Anki desktop with the AnkiConnect add-on installed to enable sync.";
+      return;
+    }
+    statusEl.textContent = `Connected. ${status.decks.length} decks found.`;
+    controls.style.display = "block";
+    const select = document.getElementById("anki-deck");
+    select.innerHTML = status.decks.map((d) => `<option value="${d}">${d}</option>`).join("");
+  } catch (e) {
+    statusEl.textContent = "Error checking AnkiConnect: " + e.message;
+  }
+}
+
+document.getElementById("import-known").addEventListener("click", async () => {
+  const deck = document.getElementById("anki-deck").value;
+  const resultEl = document.getElementById("anki-result");
+  resultEl.textContent = "Importing...";
+  try {
+    const res = await api("/api/anki/import-known", {
+      method: "POST",
+      body: JSON.stringify({ deck_name: deck }),
+    });
+    resultEl.textContent = `Imported ${res.imported} words as known.`;
+    loadStats();
+  } catch (e) {
+    resultEl.textContent = "Error: " + e.message;
+  }
+});
+
+document.getElementById("export-learning").addEventListener("click", async () => {
+  const deck = document.getElementById("anki-deck").value;
+  const resultEl = document.getElementById("anki-result");
+  resultEl.textContent = "Exporting...";
+  try {
+    const res = await api("/api/anki/export", {
+      method: "POST",
+      body: JSON.stringify({ deck_name: deck }),
+    });
+    resultEl.textContent = `Added ${res.added.length} cards. ${res.errors.length} errors.`;
+  } catch (e) {
+    resultEl.textContent = "Error: " + e.message;
+  }
+});
+
+loadStats();
+loadAnki();
+</script>
+</body>
+</html>
