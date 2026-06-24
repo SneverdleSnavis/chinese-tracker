@@ -221,7 +221,44 @@ table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
 th, td { text-align: left; padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--border); }
 th { color: var(--muted); font-weight: 600; }
 
+/* Goals (Progress) */
+.goal-row { padding: 0.6rem 0; border-bottom: 1px solid var(--border); }
+.goal-row:last-child { border-bottom: none; }
+.goal-head { display: flex; align-items: baseline; gap: 0.5rem; margin-bottom: 0.35rem; }
+.goal-label { font-weight: 600; }
+.goal-period { color: var(--muted); font-size: 0.8rem; }
+.goal-bar {
+  height: 10px;
+  background: #11141a;
+  border-radius: 5px;
+  overflow: hidden;
+  margin-bottom: 0.35rem;
+}
+.goal-fill { height: 100%; background: var(--accent); border-radius: 5px; transition: width 0.3s; }
+.goal-fill.met { background: var(--known); }
+.goal-meta { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; flex-wrap: wrap; }
+.goal-current { color: var(--muted); font-size: 0.85rem; }
+.goal-edit { display: flex; align-items: center; gap: 0.4rem; }
+.goal-edit input { width: 5rem; padding: 0.3rem 0.4rem; }
+.goal-edit button { font-size: 0.78rem; padding: 0.25rem 0.6rem; }
+
 /* Activity heatmap + growth chart (Progress) */
+.chart-wrap { position: relative; }
+.hit { fill: transparent; cursor: pointer; }
+.chart-tooltip {
+  position: absolute;
+  transform: translate(-50%, -115%);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.35rem 0.55rem;
+  font-size: 0.8rem;
+  color: var(--text);
+  pointer-events: none;
+  white-space: nowrap;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.4);
+  z-index: 5;
+}
 .heatmap-svg { max-width: 100%; display: block; }
 .hm-label { fill: var(--muted); font-size: 9px; }
 .growth-svg { display: block; }

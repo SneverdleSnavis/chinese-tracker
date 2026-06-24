@@ -135,6 +135,16 @@ tracks. Two surfaces use it:
 Served by `GET /api/learn/next?scope=all|text&text_id=&limit=` and
 `GET /api/analytics/coverage` (see `_coverage`/`learn_next` in `backend/main.py`).
 
+## Goals
+
+The **Progress** tab has a Goals card where you set targets and watch live
+progress bars. Four goal kinds: **total known words** (cumulative) and three
+rolling weekly targets — **new known words**, **texts added**, and **study
+days** (each measured over the last 7 days). Set or change a target inline; a bar
+turns green with a ✓ when met. Stored in the `goals` table (one row per kind);
+progress is computed live by `GET /api/goals`, set via `PUT /api/goals/{kind}`,
+cleared via `DELETE /api/goals/{kind}` (kinds defined in `GOAL_DEFS`).
+
 ## Progress dashboard (streaks, activity, growth)
 
 The top of the **Progress** tab summarises your study habit:

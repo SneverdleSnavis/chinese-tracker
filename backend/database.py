@@ -69,6 +69,14 @@ CREATE TABLE IF NOT EXISTS segmentation_overrides (
     UNIQUE(kind, word)
 );
 
+-- User-set study goals. One row per goal kind (e.g. known_total,
+-- known_per_week); target is the number to reach. Progress is computed live.
+CREATE TABLE IF NOT EXISTS goals (
+    kind TEXT PRIMARY KEY,
+    target INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+);
+
 -- Multiple-choice comprehension questions per text. Either pasted in (as JSON,
 -- generated in any chatbot) or produced by the optional Claude endpoint. choices
 -- is a JSON array of strings; answer is the 0-based index of the correct choice.

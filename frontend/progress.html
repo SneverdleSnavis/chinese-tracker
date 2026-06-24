@@ -12,6 +12,11 @@
 
   <div class="stats-grid" id="streak-stats"></div>
 
+  <div class="card" id="goals-card">
+    <h2>Goals</h2>
+    <div id="goals-list">Loading…</div>
+  </div>
+
   <div class="card">
     <h2>Activity</h2>
     <div id="heatmap"></div>
@@ -41,6 +46,42 @@ document.getElementById("nav").innerHTML = navHtml("/progress");
 
 function esc(s) {
   return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+// ---------- Goals ----------
+
+async function loadGoals() {
+  const res = await api("/api/goals");
+  document.getElementById("goals-list").innerHTML = res.goals.map((g) => {
+    const period = g.period === "week" ? "this week (last 7 days)" : "all time";
+    return `<div class="goal-row">
+      <div class="goal-head">
+        <span class="goal-label">${g.label}</span>
+        <span class="goal-period">${period}</span>
+      </div>
+      <div class="goal-bar"><div class="goal-fill ${g.met ? "met" : ""}" style="width:${g.pct}%;"></div></div>
+      <div class="goal-meta">
+        <span class="goal-current">${g.current}${g.target ? " / " + g.target : ""} ${g.unit}${g.met ? " ✓" : ""}</span>
+        <span class="goal-edit">
+          <input type="number" min="1" value="${g.target || ""}" placeholder="target" id="goal-${g.kind}">
+          <button onclick="saveGoal('${g.kind}')">Save</button>
+          ${g.target ? `<button class="secondary" onclick="clearGoal('${g.kind}')">Clear</button>` : ""}
+        </span>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+async function saveGoal(kind) {
+  const v = parseInt(document.getElementById("goal-" + kind).value, 10);
+  if (!v || v <= 0) return;
+  await api(`/api/goals/${kind}`, { method: "PUT", body: JSON.stringify({ target: v }) });
+  await loadGoals();
+}
+
+async function clearGoal(kind) {
+  await api(`/api/goals/${kind}`, { method: "DELETE" });
+  await loadGoals();
 }
 
 // ---------- Streaks + heatmap + growth ----------
@@ -134,7 +175,14 @@ function renderGrowth(known, seen, todayStr) {
     return series.map((p, i) => `${i ? "L" : "M"}${x(p.date).toFixed(1)},${y(p.value).toFixed(1)}`).join(" ");
   }
   function dots(series, cls) {
-    return series.map((p) => `<circle cx="${x(p.date).toFixed(1)}" cy="${y(p.value).toFixed(1)}" r="2.5" class="${cls}"><title>${p.date}: ${p.value}</title></circle>`).join("");
+    return series.map((p) => `<circle cx="${x(p.date).toFixed(1)}" cy="${y(p.value).toFixed(1)}" r="2.5" class="${cls}"/>`).join("");
+  }
+  // Invisible, generously-sized hover targets carrying each point's data.
+  function hits(series, label) {
+    return series.map((p) =>
+      `<circle cx="${x(p.date).toFixed(1)}" cy="${y(p.value).toFixed(1)}" r="10" class="hit" ` +
+      `data-label="${label}" data-date="${p.date}" data-value="${p.value}" />`
+    ).join("");
   }
   // y gridlines
   let grid = "";
@@ -146,13 +194,32 @@ function renderGrowth(known, seen, todayStr) {
   }
   const seenPath = path(seen), knownPath = path(known);
   box.innerHTML =
+    `<div class="chart-wrap">` +
     `<svg viewBox="0 0 ${W} ${H}" width="100%" class="growth-svg">` +
     grid +
     (seenPath ? `<path d="${seenPath}" class="line-seen" fill="none"/>` + dots(seen, "dot-seen") : "") +
     (knownPath ? `<path d="${knownPath}" class="line-known" fill="none"/>` + dots(known, "dot-known") : "") +
+    hits(seen, "Words encountered") + hits(known, "Known words") +
     `</svg>` +
+    `<div class="chart-tooltip" id="growth-tip" style="display:none;"></div>` +
+    `</div>` +
     `<div class="chart-legend"><span class="key key-known"></span>Known words` +
     `<span class="key key-seen"></span>Words encountered</div>`;
+
+  // Show a tooltip when hovering a point's hit target.
+  const wrap = box.querySelector(".chart-wrap");
+  const tip = box.querySelector("#growth-tip");
+  wrap.querySelectorAll(".hit").forEach((h) => {
+    h.addEventListener("mouseenter", () => {
+      tip.innerHTML = `<strong>${h.dataset.label}</strong><br>${h.dataset.date}: ${(+h.dataset.value).toLocaleString()}`;
+      tip.style.display = "block";
+      const wrapBox = wrap.getBoundingClientRect();
+      const dotBox = h.getBoundingClientRect();
+      tip.style.left = (dotBox.left - wrapBox.left + dotBox.width / 2) + "px";
+      tip.style.top = (dotBox.top - wrapBox.top) + "px";
+    });
+    h.addEventListener("mouseleave", () => { tip.style.display = "none"; });
+  });
 }
 
 // ---------- HSK bands (existing) ----------
@@ -202,12 +269,13 @@ async function openBand(band, scroll = true, showLoading = true) {
 async function markWord(word, status) {
   const y = window.scrollY;
   await api("/api/words/status", { method: "POST", body: JSON.stringify({ word, status }) });
-  await Promise.all([loadProgress(), loadTimeline()]);
+  await Promise.all([loadProgress(), loadTimeline(), loadGoals()]);
   if (activeBand != null) await openBand(activeBand, false, false);
   window.scrollTo(0, y);
 }
 
 loadTimeline();
+loadGoals();
 loadProgress();
 </script>
 </body>

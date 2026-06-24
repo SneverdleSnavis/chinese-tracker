@@ -782,6 +782,89 @@ def analytics_timeline(days: int = 371):
     }
 
 
+# ---------- Goals / targets ----------
+
+# Each goal kind, with how to label it and whether it's a rolling-weekly target
+# or a cumulative total. Progress is computed live in get_goals.
+GOAL_DEFS = {
+    "known_total":         {"label": "Total known words",  "unit": "words", "period": "total"},
+    "known_per_week":      {"label": "New known words",    "unit": "words", "period": "week"},
+    "texts_per_week":      {"label": "Texts added",        "unit": "texts", "period": "week"},
+    "study_days_per_week": {"label": "Study days",         "unit": "days",  "period": "week"},
+}
+
+
+def _goal_current(conn, kind: str) -> int:
+    from datetime import datetime, timezone, timedelta
+    since = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    if kind == "known_total":
+        return conn.execute("SELECT COUNT(*) c FROM words WHERE status='known'").fetchone()["c"]
+    if kind == "known_per_week":
+        return conn.execute(
+            "SELECT COUNT(*) c FROM words WHERE status='known' AND status_updated >= ?", (since,)
+        ).fetchone()["c"]
+    if kind == "texts_per_week":
+        return conn.execute("SELECT COUNT(*) c FROM texts WHERE created_at >= ?", (since,)).fetchone()["c"]
+    if kind == "study_days_per_week":
+        days = set()
+        for r in conn.execute("SELECT DISTINCT substr(looked_up_at,1,10) d FROM lookups WHERE looked_up_at >= ?", (since,)):
+            if r["d"]:
+                days.add(r["d"])
+        for r in conn.execute("SELECT DISTINCT substr(status_updated,1,10) d FROM words WHERE status_updated >= ?", (since,)):
+            if r["d"]:
+                days.add(r["d"])
+        return len(days)
+    return 0
+
+
+@app.get("/api/goals")
+def get_goals():
+    """Every goal kind with its target (if set) and live progress."""
+    with db() as conn:
+        set_rows = {r["kind"]: r["target"] for r in conn.execute("SELECT kind, target FROM goals").fetchall()}
+        out = []
+        for kind, meta in GOAL_DEFS.items():
+            target = set_rows.get(kind)
+            current = _goal_current(conn, kind)
+            out.append({
+                "kind": kind,
+                "label": meta["label"],
+                "unit": meta["unit"],
+                "period": meta["period"],
+                "target": target,
+                "current": current,
+                "pct": (min(current, target) / target * 100) if target else 0,
+                "met": bool(target) and current >= target,
+            })
+    return {"goals": out}
+
+
+class GoalSet(BaseModel):
+    target: int
+
+
+@app.put("/api/goals/{kind}")
+def set_goal(kind: str, body: GoalSet):
+    if kind not in GOAL_DEFS:
+        raise HTTPException(404, "unknown goal kind")
+    if body.target <= 0:
+        raise HTTPException(400, "target must be positive")
+    with db() as conn:
+        conn.execute(
+            "INSERT INTO goals (kind, target, created_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(kind) DO UPDATE SET target=excluded.target",
+            (kind, body.target, now()),
+        )
+    return {"ok": True, "kind": kind, "target": body.target}
+
+
+@app.delete("/api/goals/{kind}")
+def clear_goal(kind: str):
+    with db() as conn:
+        conn.execute("DELETE FROM goals WHERE kind = ?", (kind,))
+    return {"ok": True, "kind": kind}
+
+
 # ---------- Learn next (frequency-ranked study list) ----------
 
 def _coverage(conn):
