@@ -75,6 +75,10 @@ MIGRATIONS = [
     ("texts", "kind", "ALTER TABLE texts ADD COLUMN kind TEXT NOT NULL DEFAULT 'article'"),
     ("texts", "video_url", "ALTER TABLE texts ADD COLUMN video_url TEXT"),
     ("texts", "completion", "ALTER TABLE texts ADD COLUMN completion TEXT NOT NULL DEFAULT 'unread'"),
+    # Anki integration: remember which words have been pushed as cards, and the
+    # note id so we can update (not duplicate) them on later syncs.
+    ("words", "exported_at", "ALTER TABLE words ADD COLUMN exported_at TEXT"),
+    ("words", "anki_note_id", "ALTER TABLE words ADD COLUMN anki_note_id INTEGER"),
 ]
 
 

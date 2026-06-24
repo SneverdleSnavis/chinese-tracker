@@ -29,10 +29,24 @@
         <label>Deck</label>
         <select id="anki-deck"></select>
       </div>
+      <label style="display:flex; align-items:center; gap:0.4rem; margin-bottom:0.4rem;">
+        <input type="checkbox" id="anki-examples" checked style="width:auto;">
+        Add an example sentence from your texts to each card
+      </label>
+      <label style="display:flex; align-items:center; gap:0.4rem; margin-bottom:0.6rem;">
+        <input type="checkbox" id="anki-audio" checked style="width:auto;">
+        Generate pronunciation audio (free neural voice) for each card
+      </label>
       <div class="actions" style="display:flex; gap:0.5rem;">
-        <button id="import-known">Import known words from this deck</button>
-        <button id="export-learning" class="secondary">Export "learning" words to this deck</button>
+        <button id="anki-sync">Sync to Anki</button>
+        <button id="anki-refresh" class="secondary">Refresh existing cards</button>
+        <button id="import-known" class="secondary">Import known words from this deck</button>
       </div>
+      <p style="color: var(--muted); font-size:0.8rem; margin:0.6rem 0 0;">
+        Sync pushes new "learning" words as cards (skipping ones already there),
+        promotes any cards you've matured in Anki to "known", and tells Anki to
+        sync with AnkiWeb so they reach your phone.
+      </p>
       <div id="anki-result" style="margin-top:0.5rem; color: var(--muted); font-size: 0.85rem;"></div>
     </div>
   </div>
@@ -108,18 +122,55 @@ document.getElementById("import-known").addEventListener("click", async () => {
   }
 });
 
-document.getElementById("export-learning").addEventListener("click", async () => {
+document.getElementById("anki-refresh").addEventListener("click", async () => {
   const deck = document.getElementById("anki-deck").value;
+  const includeExamples = document.getElementById("anki-examples").checked;
+  const includeAudio = document.getElementById("anki-audio").checked;
   const resultEl = document.getElementById("anki-result");
-  resultEl.textContent = "Exporting...";
+  const btn = document.getElementById("anki-refresh");
+  btn.disabled = true;
+  resultEl.textContent = "Refreshing existing cards... (regenerating audio takes a moment each)";
   try {
-    const res = await api("/api/anki/export", {
+    const res = await api("/api/anki/refresh-existing", {
       method: "POST",
-      body: JSON.stringify({ deck_name: deck }),
+      body: JSON.stringify({ deck_name: deck, include_examples: includeExamples, include_audio: includeAudio }),
     });
-    resultEl.textContent = `Added ${res.added.length} cards. ${res.errors.length} errors.`;
+    const parts = [`${res.updated.length} card(s) refreshed`];
+    if (res.skipped.length) parts.push(`${res.skipped.length} skipped (not in word list)`);
+    parts.push(res.synced_to_ankiweb ? "synced to AnkiWeb ✓" : "AnkiWeb sync failed");
+    if (res.errors.length) parts.push(`${res.errors.length} error(s)`);
+    resultEl.textContent = parts.join(" · ");
   } catch (e) {
     resultEl.textContent = "Error: " + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+document.getElementById("anki-sync").addEventListener("click", async () => {
+  const deck = document.getElementById("anki-deck").value;
+  const includeExamples = document.getElementById("anki-examples").checked;
+  const includeAudio = document.getElementById("anki-audio").checked;
+  const resultEl = document.getElementById("anki-result");
+  const btn = document.getElementById("anki-sync");
+  btn.disabled = true;
+  resultEl.textContent = "Syncing... (this opens Anki's AnkiWeb sync — give it a moment)";
+  try {
+    const res = await api("/api/anki/sync", {
+      method: "POST",
+      body: JSON.stringify({ deck_name: deck, include_examples: includeExamples, include_audio: includeAudio }),
+    });
+    const parts = [`${res.added.length} new card(s)`];
+    if (res.updated.length) parts.push(`${res.updated.length} updated`);
+    if (res.promoted_to_known.length) parts.push(`${res.promoted_to_known.length} promoted to known`);
+    parts.push(res.synced_to_ankiweb ? "synced to AnkiWeb ✓" : "AnkiWeb sync failed");
+    if (res.errors.length) parts.push(`${res.errors.length} error(s)`);
+    resultEl.textContent = parts.join(" · ");
+    loadStats();
+  } catch (e) {
+    resultEl.textContent = "Error: " + e.message;
+  } finally {
+    btn.disabled = false;
   }
 });
 

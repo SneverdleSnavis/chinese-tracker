@@ -1,3 +1,4 @@
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -11,6 +12,7 @@ import anki
 import database
 import fetchers
 import subtitles
+import tts
 from database import db
 from normalize import to_simplified
 from segmentation import segment, apply_override, load_overrides
@@ -323,10 +325,10 @@ def log_lookup(body: LookupLog):
 # ---------- Dictionary lookup & custom definitions ----------
 
 def _suggest_pinyin(word: str) -> str:
-    """Generate numbered pinyin (CC-CEDICT style) for a word jieba/CC-CEDICT
-    can't define, so the user only has to fill in the meaning."""
+    """Generate diacritic pinyin (nǐ hǎo) for a word jieba/CC-CEDICT can't
+    define, so the user only has to fill in the meaning."""
     from pypinyin import pinyin, Style
-    parts = pinyin(word, style=Style.TONE3, neutral_tone_with_five=True)
+    parts = pinyin(word, style=Style.TONE)
     return " ".join(p[0] for p in parts)
 
 
@@ -543,16 +545,130 @@ def anki_import_known(body: AnkiImport):
     return {"imported": imported}
 
 
-class AnkiExport(BaseModel):
+# A card whose Anki interval has grown to at least this many days is treated as
+# genuinely learned, and its word is promoted to 'known' on the site.
+MATURE_INTERVAL_DAYS = 21
+
+# Sentence boundaries for pulling an example sentence out of a stored text.
+_SENT_SPLIT = re.compile(r"[。！？!?\n；;]")
+
+
+def _extract_sentence(content: str, word: str) -> str | None:
+    """Find a sentence in `content` containing `word` and return it with the
+    word bolded. Skips sentences that are too long to be a useful flashcard."""
+    for sentence in _SENT_SPLIT.split(content):
+        s = sentence.strip()
+        if word in s and 2 <= len(s) <= 60:
+            return s.replace(word, f"<b>{word}</b>")
+    return None
+
+
+def _word_context(conn, word: str):
+    """Return (example_sentence, source_title) for where the user last met
+    `word`, searching their articles first, then subtitle lines. Either value
+    may be None if nothing suitable is found."""
+    like = f"%{word}%"
+    rows = conn.execute(
+        "SELECT title, content FROM texts WHERE content LIKE ? "
+        "ORDER BY COALESCE(last_read_at, created_at) DESC LIMIT 5",
+        (like,),
+    ).fetchall()
+    for r in rows:
+        s = _extract_sentence(r["content"], word)
+        if s:
+            return s, r["title"]
+    row = conn.execute(
+        "SELECT sl.content AS content, t.title AS title FROM subtitle_lines sl "
+        "JOIN texts t ON t.id = sl.text_id WHERE sl.content LIKE ? LIMIT 1",
+        (like,),
+    ).fetchone()
+    if row:
+        return _extract_sentence(row["content"], word), row["title"]
+    return None, None
+
+
+def _slug_tag(prefix: str, value: str) -> str:
+    """Turn a free-text title into a safe single-token Anki tag."""
+    slug = re.sub(r"[^0-9A-Za-z一-鿿]+", "_", value).strip("_")[:30]
+    return f"{prefix}:{slug}" if slug else ""
+
+
+def _push_word(conn, deck_name: str, row, include_examples: bool, include_audio: bool):
+    """Create or update a single Anki card for `row`. Returns 'added',
+    'updated', or raises. Marks the word as exported in the local DB."""
+    word = row["word"]
+    example, title = (None, None)
+    if include_examples:
+        example, title = _word_context(conn, word)
+
+    # Generate pronunciation audio and store it in Anki's media. Soft-fails
+    # (e.g. offline) so a card is still created without audio.
+    audio_tag = None
+    if include_audio:
+        try:
+            fname = tts.media_filename(word)
+            anki.store_media(fname, tts.synth_mp3(word))
+            audio_tag = f"[sound:{fname}]"
+        except Exception:
+            audio_tag = None
+
+    tags = [f"added:{datetime.now().strftime('%Y-%m')}"]
+    if title:
+        src = _slug_tag("src", title)
+        if src:
+            tags.append(src)
+
+    pinyin, definition = row["pinyin"] or "", row["definition"] or ""
+    existing_id = anki.find_tracker_note_id(word)
+    if existing_id:
+        anki.update_note(existing_id, pinyin, definition, example, audio_tag, tags)
+        note_id, result = existing_id, "updated"
+    else:
+        note_id = anki.add_note(deck_name, word, pinyin, definition, example, audio_tag, tags)
+        result = "added"
+
+    conn.execute(
+        "UPDATE words SET exported_at = ?, anki_note_id = ? WHERE word = ?",
+        (now(), note_id, word),
+    )
+    return result
+
+
+class AnkiSync(BaseModel):
     deck_name: str
-    words: list[str] | None = None  # if omitted, export all 'learning' words
+    include_examples: bool = True
+    include_audio: bool = True
+    words: list[str] | None = None  # explicit subset; otherwise new 'learning' words
 
 
-@app.post("/api/anki/export")
-def anki_export(body: AnkiExport):
+@app.post("/api/anki/sync")
+def anki_sync(body: AnkiSync):
+    """One-click sync: pull matured cards back to 'known', push new learning
+    words as cards (with example sentences, no duplicates), then sync AnkiWeb."""
     if not anki.is_available():
         raise HTTPException(503, "AnkiConnect not reachable. Is Anki running with the AnkiConnect add-on?")
+
+    promoted = []
+    added, updated, errors = [], [], []
+
     with db() as conn:
+        # 1. Maturity write-back: Anki says these are learned -> mark known here.
+        try:
+            for card in anki.get_tracker_maturity():
+                if card["interval"] >= MATURE_INTERVAL_DAYS:
+                    r = conn.execute(
+                        "SELECT status FROM words WHERE word = ?", (card["word"],)
+                    ).fetchone()
+                    if r and r["status"] != "known":
+                        conn.execute(
+                            "UPDATE words SET status = 'known', status_updated = ? WHERE word = ?",
+                            (now(), card["word"]),
+                        )
+                        promoted.append(card["word"])
+        except Exception as e:
+            errors.append({"stage": "maturity", "error": str(e)})
+
+        # 2. Push: explicit subset, or new learning words not yet in Anki.
         if body.words:
             placeholders = ",".join("?" * len(body.words))
             rows = conn.execute(
@@ -561,18 +677,83 @@ def anki_export(body: AnkiExport):
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT word, pinyin, definition FROM words WHERE status = 'learning'"
+                "SELECT word, pinyin, definition FROM words "
+                "WHERE status = 'learning' AND exported_at IS NULL"
             ).fetchall()
 
-    added = []
-    errors = []
-    for r in rows:
-        try:
-            anki.add_note(body.deck_name, r["word"], r["pinyin"] or "", r["definition"] or "")
-            added.append(r["word"])
-        except Exception as e:
-            errors.append({"word": r["word"], "error": str(e)})
-    return {"added": added, "errors": errors}
+        for r in rows:
+            try:
+                result = _push_word(conn, body.deck_name, r, body.include_examples, body.include_audio)
+                (added if result == "added" else updated).append(r["word"])
+            except Exception as e:
+                errors.append({"word": r["word"], "error": str(e)})
+
+    # 3. Trigger AnkiWeb sync so the new cards reach the phone.
+    synced = False
+    try:
+        anki.sync()
+        synced = True
+    except Exception as e:
+        errors.append({"stage": "ankiweb-sync", "error": str(e)})
+
+    return {
+        "added": added,
+        "updated": updated,
+        "promoted_to_known": promoted,
+        "synced_to_ankiweb": synced,
+        "errors": errors,
+    }
+
+
+class AnkiRefresh(BaseModel):
+    deck_name: str = ""
+    include_examples: bool = True
+    include_audio: bool = True
+
+
+@app.post("/api/anki/refresh-existing")
+def anki_refresh_existing(body: AnkiRefresh):
+    """Re-render every existing chinese-tracker card with the current formatting
+    (diacritic pinyin, example sentence, pronunciation audio). Updates cards in
+    place — no duplicates — then syncs to AnkiWeb. Handy after improving the card
+    template or fixing definitions."""
+    if not anki.is_available():
+        raise HTTPException(503, "AnkiConnect not reachable. Is Anki running with the AnkiConnect add-on?")
+
+    note_ids = anki._invoke("findNotes", query=f"tag:{anki.TRACKER_TAG}")
+    notes = anki._invoke("notesInfo", notes=note_ids) if note_ids else []
+
+    updated, skipped, errors = [], [], []
+    with db() as conn:
+        for note in notes:
+            word = anki._note_hanzi(note.get("fields", {}))
+            if not word:
+                continue
+            row = conn.execute(
+                "SELECT word, pinyin, definition FROM words WHERE word = ?", (word,)
+            ).fetchone()
+            if not row:
+                skipped.append(word)  # card exists in Anki but not in our word list
+                continue
+            try:
+                _push_word(conn, body.deck_name, row, body.include_examples, body.include_audio)
+                updated.append(word)
+            except Exception as e:
+                errors.append({"word": word, "error": str(e)})
+
+    synced = False
+    try:
+        anki.sync()
+        synced = True
+    except Exception as e:
+        errors.append({"stage": "ankiweb-sync", "error": str(e)})
+
+    return {
+        "updated": updated,
+        "skipped": skipped,
+        "synced_to_ankiweb": synced,
+        "errors": errors,
+    }
 
 
 # ---------- Frontend static files ----------
