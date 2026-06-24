@@ -164,7 +164,8 @@ def _effective_entry(conn, word: str):
     from dictionary import lookup as cedict_lookup
     entries = cedict_lookup(word)
     if entries:
-        return entries[0]["pinyin"], entries[0]["definition"], "cedict"
+        py, defn = _format_entries(entries)
+        return py, defn, "cedict"
     row = conn.execute("SELECT pinyin, definition FROM words WHERE word = ?", (word,)).fetchone()
     if row:
         return row["pinyin"] or "", row["definition"] or "", "words"
@@ -224,6 +225,18 @@ def edit_word(word: str, body: WordEdit):
     return {"ok": True, "word": word, "pinyin": new_py, "definition": new_def, "status": body.status}
 
 
+@app.delete("/api/words/{word}")
+def delete_word(word: str):
+    """Remove a word entirely from the local tracker (word row, any custom
+    override, and its lookup history). Does not touch an existing Anki card."""
+    word = to_simplified(word.strip())
+    with db() as conn:
+        conn.execute("DELETE FROM words WHERE word = ?", (word,))
+        conn.execute("DELETE FROM custom_definitions WHERE word = ?", (word,))
+        conn.execute("DELETE FROM lookups WHERE word = ?", (word,))
+    return {"ok": True, "word": word}
+
+
 @app.delete("/api/words/{word}/custom")
 def revert_word(word: str):
     """Remove a user override, reverting the word to its CC-CEDICT definition."""
@@ -233,12 +246,36 @@ def revert_word(word: str):
         from dictionary import lookup as cedict_lookup
         entries = cedict_lookup(word)
         if entries:
+            py, defn = _format_entries(entries)
             conn.execute(
                 "UPDATE words SET pinyin = ?, definition = ? WHERE word = ?",
-                (entries[0]["pinyin"], entries[0]["definition"], word),
+                (py, defn, word),
             )
         py, defn, source = _effective_entry(conn, word)
     return {"ok": True, "word": word, "pinyin": py, "definition": defn, "source": source}
+
+
+def _format_entries(entries):
+    """Combine ALL dictionary entries for a word into a single (pinyin, definition)
+    pair for storage/display, mirroring the reader popup. Multiple readings/senses
+    are listed one per line as 'pinyin — definition'; a single entry is kept plain."""
+    if not entries:
+        return "", ""
+    seen, uniq = set(), []
+    for e in entries:
+        key = (e.get("pinyin", ""), e.get("definition", ""))
+        if key not in seen:
+            seen.add(key)
+            uniq.append(e)
+    readings = []
+    for e in uniq:
+        if e.get("pinyin") and e["pinyin"] not in readings:
+            readings.append(e["pinyin"])
+    pinyin = " / ".join(readings)
+    if len(uniq) == 1:
+        return pinyin, uniq[0].get("definition", "")
+    definition = "\n".join(f"{e.get('pinyin', '')} — {e.get('definition', '')}" for e in uniq)
+    return pinyin, definition
 
 
 def _record_word_seen(conn, word: str, pinyin: str = "", definition: str = ""):
@@ -345,8 +382,7 @@ def _tokenize_with_status(conn, content: str, record_seen: bool = True):
             if tok["text"] in custom:
                 tok["entries"] = [custom[tok["text"]]]
             if record_seen:
-                pinyin = tok["entries"][0]["pinyin"] if tok["entries"] else ""
-                definition = tok["entries"][0]["definition"] if tok["entries"] else ""
+                pinyin, definition = _format_entries(tok["entries"])
                 _record_word_seen(conn, tok["text"], pinyin, definition)
     return tokens
 
@@ -637,6 +673,69 @@ def analytics_summary():
             "recent_words": [dict(r) for r in recent_words],
             "lookups_by_day": [dict(r) for r in lookups_by_day],
         }
+
+
+# ---------- Comprehension questions (LLM) ----------
+
+class ComprehensionQuestion(BaseModel):
+    question: str   # in simplified Chinese
+    answer: str     # concise reference answer in simplified Chinese
+
+
+class ComprehensionQuestions(BaseModel):
+    questions: list[ComprehensionQuestion]
+
+
+def _text_plain_content(conn, text_id: int):
+    """Return (title, plain_text) for a text — article body or joined subtitle lines."""
+    row = conn.execute("SELECT title, content, kind FROM texts WHERE id = ?", (text_id,)).fetchone()
+    if not row:
+        return None, None
+    if row["kind"] == "subtitle":
+        lines = conn.execute(
+            "SELECT content FROM subtitle_lines WHERE text_id = ? ORDER BY idx", (text_id,)
+        ).fetchall()
+        content = "\n".join(r["content"] for r in lines) or row["content"]
+    else:
+        content = row["content"]
+    return row["title"], content
+
+
+@app.post("/api/texts/{text_id}/questions")
+def comprehension_questions(text_id: int):
+    """Generate reading-comprehension questions for a text via Claude. Requires
+    ANTHROPIC_API_KEY in the environment."""
+    import os
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        raise HTTPException(503, "ANTHROPIC_API_KEY is not set. Add it to the server's environment to enable comprehension questions.")
+    with db() as conn:
+        title, content = _text_plain_content(conn, text_id)
+    if content is None:
+        raise HTTPException(404, "text not found")
+    content = content.strip()
+    if not content:
+        raise HTTPException(400, "text has no content")
+
+    import anthropic
+    client = anthropic.Anthropic()
+    system = (
+        "You are a Mandarin Chinese reading-comprehension tutor. Given a Chinese text, "
+        "write 4 comprehension questions in simplified Chinese that check whether a learner "
+        "understood it — mixing literal recall and light inference. Keep each question short. "
+        "Provide a concise reference answer in simplified Chinese for each. Do not add pinyin "
+        "or translations."
+    )
+    try:
+        response = client.messages.parse(
+            model="claude-opus-4-8",
+            max_tokens=4000,
+            system=system,
+            messages=[{"role": "user", "content": f"Text title: {title}\n\nText:\n{content}"}],
+            output_format=ComprehensionQuestions,
+        )
+    except anthropic.APIStatusError as e:
+        raise HTTPException(502, f"Claude API error: {e.message}")
+    return response.parsed_output
 
 
 # ---------- Anki integration ----------

@@ -8,6 +8,28 @@ CEDICT_PATH = Path(__file__).parent / "data" / "cedict.txt"
 
 LINE_RE = re.compile(r"^(\S+)\s+(\S+)\s+\[(.*?)\]\s+/(.*)/$")
 
+# Entries whose definition begins with one of these are "low value" senses the
+# user doesn't want cluttering lookups: surnames, and variant/old-variant
+# cross-references to another character. Filtered out unless they're all a word
+# has. Add patterns here to exclude more systematically.
+_NOISE_ENTRY_RE = re.compile(
+    r"^\s*(surname\s"
+    r"|(?:old|archaic|ancient)\s+variant\s+of\b"
+    r"|variant\s+of\b)",
+    re.IGNORECASE,
+)
+
+
+def _is_noise_entry(definition: str) -> bool:
+    return bool(_NOISE_ENTRY_RE.match(definition or ""))
+
+
+def filter_entries(entries):
+    """Drop surname/variant noise entries, but keep them if that's all there is
+    (so a word that's *only* a surname still shows something)."""
+    kept = [e for e in entries if not _is_noise_entry(e.get("definition", ""))]
+    return kept if kept else entries
+
 
 @lru_cache(maxsize=1)
 def load_dictionary():
@@ -34,4 +56,4 @@ def load_dictionary():
 
 def lookup(word: str):
     d = load_dictionary()
-    return d.get(word, [])
+    return filter_entries(d.get(word, []))

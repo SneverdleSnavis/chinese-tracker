@@ -151,8 +151,10 @@ label { display: block; margin-bottom: 0.3rem; font-size: 0.85rem; color: var(--
 }
 #words-table .w-hanzi { font-size: 1.15rem; }
 #words-table .w-pinyin { color: var(--accent); white-space: nowrap; }
-#words-table td { vertical-align: middle; }
-#words-table input { padding: 0.35rem; }
+#words-table td { vertical-align: top; }
+#words-table .w-def { line-height: 1.5; }
+#words-table input, #words-table textarea { padding: 0.35rem; }
+#words-table textarea { resize: vertical; min-height: 3.5rem; }
 #words-table .w-actions { white-space: nowrap; text-align: right; }
 #words-table .w-actions button { font-size: 0.8rem; padding: 0.3rem 0.6rem; }
 .word-empty { padding: 1.5rem; text-align: center; color: var(--muted); }
@@ -204,6 +206,73 @@ label { display: block; margin-bottom: 0.3rem; font-size: 0.85rem; color: var(--
 table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
 th, td { text-align: left; padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--border); }
 th { color: var(--muted); font-weight: 600; }
+
+/* Comprehension questions */
+#questions-bar { margin-bottom: 1rem; }
+.q-item {
+  border-left: 3px solid var(--accent);
+  padding: 0.4rem 0.75rem;
+  margin: 0.6rem 0;
+  background: var(--panel);
+  border-radius: 0 6px 6px 0;
+}
+.q-q { font-size: 1.15rem; margin-bottom: 0.3rem; }
+.q-a { color: var(--known); margin-top: 0.4rem; font-size: 1.05rem; }
+.q-status { color: var(--muted); font-size: 0.9rem; }
+.link-btn {
+  background: none;
+  color: var(--accent);
+  padding: 0;
+  font-size: 0.8rem;
+}
+
+/* Embedded video (subtitle reader) */
+.video-wrap {
+  max-width: 600px;
+  margin: 0 auto 1.25rem;
+  position: sticky;
+  top: 4rem;
+  z-index: 5;
+}
+
+/* Split view: video sticky on the left, subtitles scrolling on the right.
+   #video-container is a flex item that stretches to the full row height, so
+   the sticky .video-wrap inside it can travel as you scroll the subtitles. */
+#content-row.split {
+  display: flex;
+  gap: 1.5rem;
+  align-items: stretch;
+}
+#content-row.split #video-container {
+  flex: 0 0 42%;
+}
+#content-row.split #video-container .video-wrap {
+  max-width: 100%;
+  margin: 0;
+}
+#content-row.split #right-col {
+  flex: 1;
+  min-width: 0;
+}
+@media (max-width: 760px) {
+  #content-row.split { display: block; }
+  #content-row.split #video-container .video-wrap { margin: 0 auto 1.25rem; }
+}
+.video-wrap .yt-frame {
+  position: relative;
+  padding-bottom: 56.25%;
+  height: 0;
+  background: #000;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+}
+.video-wrap iframe {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  border: 0;
+}
 
 /* Subtitle reader */
 .reader-text.subtitle-mode {

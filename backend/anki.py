@@ -56,6 +56,9 @@ def store_media(filename: str, data: bytes):
 
 
 def _build_back(pinyin: str, definition: str, example: str | None, audio: str | None = None) -> str:
+    # Definitions may span multiple readings/senses (newline-separated); render
+    # each on its own line in the card.
+    definition = (definition or "").replace("\n", "<br>")
     back = f"{pinyin}<br>{definition}".strip()
     if audio:
         back += f"<br>{audio}"  # [sound:...] tag — plays when the answer is shown

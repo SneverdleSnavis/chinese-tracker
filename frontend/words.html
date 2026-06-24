@@ -99,14 +99,20 @@ function rowHtml(w) {
   const custom = w.has_custom
     ? ` <span class="status-badge learning" title="You edited this">edited</span>` : "";
   const anki = w.in_anki || w.exported_at ? "✓" : "";
-  return `<tr data-word="${esc(w.word)}">
+  const defHtml = esc(w.definition).replace(/\n/g, "<br>");
+  const revertBtn = w.has_custom
+    ? ` <button class="secondary" data-role="revert" title="Restore the dictionary definition">Revert</button>` : "";
+  return `<tr data-word="${esc(w.word)}" data-pinyin="${esc(w.pinyin)}" data-def="${esc(w.definition)}">
     <td class="w-hanzi">${esc(w.word)}</td>
     <td class="w-pinyin">${esc(w.pinyin)}</td>
-    <td class="w-def">${esc(w.definition)}${custom}</td>
+    <td class="w-def">${defHtml}${custom}</td>
     <td>${statusSelect(w)}</td>
     <td style="text-align:center; color: var(--known);">${anki}</td>
     <td style="text-align:center; color: var(--muted);">${w.seen_count}</td>
-    <td class="w-actions"><button class="secondary" data-role="edit">Edit</button></td>
+    <td class="w-actions">
+      <button class="secondary" data-role="edit">Edit</button>${revertBtn}
+      <button class="secondary danger" data-role="delete" title="Delete this word">✕</button>
+    </td>
   </tr>`;
 }
 
@@ -129,11 +135,10 @@ async function load(reset) {
 
 // --- inline editing ---
 function enterEdit(tr) {
-  const word = tr.dataset.word;
-  const pin = tr.querySelector(".w-pinyin").textContent;
-  const def = tr.querySelector(".w-def").childNodes[0].textContent;
+  const pin = tr.dataset.pinyin || "";
+  const def = tr.dataset.def || "";
   tr.querySelector(".w-pinyin").innerHTML = `<input data-role="pinyin" value="${esc(pin)}">`;
-  tr.querySelector(".w-def").innerHTML = `<input data-role="def" value="${esc(def)}">`;
+  tr.querySelector(".w-def").innerHTML = `<textarea data-role="def" rows="4">${esc(def)}</textarea>`;
   tr.querySelector(".w-actions").innerHTML =
     `<button data-role="save">Save</button> <button class="secondary" data-role="cancel">Cancel</button>`;
 }
@@ -163,6 +168,17 @@ async function revert(tr) {
     seen_count: tr.querySelector("td:nth-child(6)").textContent.trim() });
 }
 
+async function deleteWord(tr) {
+  const word = tr.dataset.word;
+  if (!confirm(`Delete "${word}" from your tracker? It's removed from the word list and lookup history. An existing Anki card is left untouched.`)) return;
+  await api(`/api/words/${encodeURIComponent(word)}`, { method: "DELETE" });
+  tr.remove();
+  total -= 1;
+  offset -= 1;
+  document.getElementById("count").textContent =
+    `${total} word${total === 1 ? "" : "s"}` + (offset < total ? ` (showing ${offset})` : "");
+}
+
 function replaceRow(tr, w) {
   tr.outerHTML = rowHtml(w);
 }
@@ -175,6 +191,8 @@ tbody.addEventListener("click", (e) => {
   if (role === "edit") enterEdit(tr);
   else if (role === "save") saveEdit(tr);
   else if (role === "cancel") load(true);
+  else if (role === "revert") revert(tr);
+  else if (role === "delete") deleteWord(tr);
 });
 
 tbody.addEventListener("change", async (e) => {

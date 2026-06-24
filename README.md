@@ -78,6 +78,23 @@ All text — pasted, or fetched from any source — is converted to Simplified C
 (`backend/normalize.py`) before it's stored or scored. This keeps word tracking consistent even
 if a source (like BBC Chinese) returns Traditional characters.
 
+## Reader extras
+
+- **Embedded video** — subtitle texts imported from YouTube show an inline player
+  (sticky at the top) for side-by-side watching. Clicking a line's timestamp seeks
+  the embedded player to that moment. The player has keyboard control disabled
+  (`disablekb`), so pressing 1/2/3 to mark words never accidentally jumps the video.
+- **Comprehension questions** — the reader's "Generate comprehension questions"
+  button asks Claude (`claude-opus-4-8`, via `_text_plain_content` →
+  `/api/texts/{id}/questions`) for 4 questions about the text, each with a
+  reveal-able reference answer. Requires `ANTHROPIC_API_KEY` in the server's
+  environment; without it the button reports that cleanly. Set it before launching,
+  e.g. in PowerShell `setx ANTHROPIC_API_KEY "sk-ant-..."` (new terminal after), or
+  add it to `start_server.bat`.
+- **Edits keep your place** — splitting/merging a word re-segments without yanking
+  the page: it preserves your scroll position and re-selects the exact instance you
+  edited (matched by character offset), not the first occurrence in the text.
+
 ## Video / subtitle study
 
 The Reading page has an "Import subtitles" panel:
@@ -103,6 +120,22 @@ The **Words** tab is the home for your full word list:
   every future text, the reader, exports, and Anki cards. A word you've edited is
   marked "edited"; **Revert** removes the override and restores the dictionary entry.
 - Change a word's status (known/learning/unknown) straight from the table.
+- **Revert** an edited word to its dictionary definition, or **delete** a word
+  from the tracker entirely (✕ — removes the word row, any override, and lookup
+  history; an existing Anki card is left untouched).
+
+Words with multiple dictionary entries (e.g. several readings/senses) show **all**
+of them — one `pinyin — definition` line per entry, matching the reader popup —
+in the word list, exports, and on Anki cards. This combined form is built by
+`_format_entries` in `backend/main.py`.
+
+Low-value senses are filtered out systematically: entries beginning with
+`surname`, `variant of`, or `old/archaic/ancient variant of` are dropped before
+display (kept only if a word has nothing else). The patterns live in
+`_NOISE_ENTRY_RE` / `filter_entries` in `backend/dictionary.py` — add to that
+regex to exclude more. The filter runs at the lookup layer, so it applies to the
+reader, word list, and Anki cards alike; a user's own edited definition always
+overrides it.
 
 The list is served by `GET /api/words` (with `q`/`status`/`synced`/`custom`/`sort`/
 `limit`/`offset`), edits by `POST /api/words/{word}`, and reverts by
