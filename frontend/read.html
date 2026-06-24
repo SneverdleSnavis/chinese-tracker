@@ -24,9 +24,9 @@
       Turn any show, movie, or YouTube video with Chinese subtitles into study material.
     </p>
     <div class="field">
-      <label>YouTube URL (auto-fetches Chinese captions)</label>
+      <label>YouTube or Bilibili URL (auto-fetches Chinese captions)</label>
       <div style="display:flex; gap:0.5rem;">
-        <input id="yt-url" placeholder="https://www.youtube.com/watch?v=..." />
+        <input id="yt-url" placeholder="https://www.youtube.com/watch?v=…  or  https://www.bilibili.com/video/BV…" />
         <button id="yt-import" style="white-space:nowrap;">Import</button>
       </div>
     </div>
@@ -38,6 +38,21 @@
       </div>
     </div>
     <div id="sub-status" style="color: var(--muted); font-size:0.85rem;"></div>
+  </div>
+
+  <div class="card">
+    <h2>Import a book (EPUB / TXT)</h2>
+    <p style="color: var(--muted); font-size: 0.85rem; margin-top:0;">
+      Upload a Chinese e-book or plain-text file. EPUBs are split into one text per
+      chapter so the reader stays fast; everything is converted to simplified.
+    </p>
+    <div class="field">
+      <div style="display:flex; gap:0.5rem; align-items:center;">
+        <input type="file" id="book-file" accept=".epub,.txt" style="padding:0.35rem;" />
+        <button id="book-upload" style="white-space:nowrap;">Upload</button>
+      </div>
+    </div>
+    <div id="book-status" style="color: var(--muted); font-size:0.85rem;"></div>
   </div>
 
   <div class="card">
@@ -135,14 +150,36 @@ async function addCandidate(i) {
 document.getElementById("yt-import").addEventListener("click", async () => {
   const url = document.getElementById("yt-url").value.trim();
   const statusEl = document.getElementById("sub-status");
-  if (!url) { statusEl.textContent = "Paste a YouTube URL first."; return; }
+  if (!url) { statusEl.textContent = "Paste a YouTube or Bilibili URL first."; return; }
   statusEl.textContent = "Fetching captions… (this can take 10–20s)";
   try {
-    const res = await api("/api/subtitles/youtube", {
+    const res = await api("/api/subtitles/video", {
       method: "POST",
       body: JSON.stringify({ url }),
     });
     window.location.href = `/read/${res.id}`;
+  } catch (e) {
+    statusEl.textContent = "Error: " + e.message;
+  }
+});
+
+document.getElementById("book-upload").addEventListener("click", async () => {
+  const fileInput = document.getElementById("book-file");
+  const statusEl = document.getElementById("book-status");
+  if (!fileInput.files.length) { statusEl.textContent = "Choose a .epub or .txt file first."; return; }
+  statusEl.textContent = "Importing… (large books take a moment)";
+  const form = new FormData();
+  form.append("file", fileInput.files[0]);
+  try {
+    const res = await fetch("/api/books/upload", { method: "POST", body: form });
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    if (data.count === 1) {
+      window.location.href = `/read/${data.texts[0].id}`;
+    } else {
+      statusEl.textContent = `Imported ${data.count} chapters. They're in "Your Texts" below.`;
+      loadTexts();
+    }
   } catch (e) {
     statusEl.textContent = "Error: " + e.message;
   }

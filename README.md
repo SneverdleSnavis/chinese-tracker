@@ -68,6 +68,8 @@ The Reading page has a "Fetch new articles" panel pulling from:
 - **BBC Chinese (News)** — full article text scraped from the linked page (RSS only gives a teaser).
 - **Mandarin Bean (Graded Readers)** — learner-leveled lessons, extracted to simplified-only text
   (the source's pinyin/traditional annotations are stripped out).
+- **DW 中文**, **RFI 中文**, **RFA 普通话**, **中央社 CNA** — native news feeds scraped with the generic
+  `<p>`-tag extractor (CNA is Traditional and gets converted to Simplified on import).
 
 Each candidate shows a difficulty bar (% known/learning/unknown words, based on your current
 word-status data) before you commit to adding it. Already-imported articles (matched by source
@@ -104,16 +106,30 @@ if a source (like BBC Chinese) returns Traditional characters.
 ## Video / subtitle study
 
 The Reading page has an "Import subtitles" panel:
-- **YouTube URL** — auto-fetches the video's Chinese captions via yt-dlp (prefers manual
-  simplified subs, falls back to auto-generated). Only works if the video has Chinese captions.
+- **YouTube or Bilibili URL** — auto-fetches the video's Chinese captions via yt-dlp (prefers
+  manual simplified subs, falls back to auto-generated). `subtitles.fetch_video_subtitles` routes
+  by URL; Bilibili captions (incl. AI tracks) are parsed from yt-dlp's JSON/bcc format. Bilibili is
+  best-effort — many videos have no CC, need a login, or are geo-restricted, and you'll get a clear
+  error in those cases. Only YouTube gets the embedded split-view player; Bilibili lines link out.
 - **File upload** — drop in any `.srt` or `.vtt` file (downloaded shows, movies, subs you grabbed
   manually).
 
 Imported subtitles open in the reader as timestamped lines with the same click-to-lookup and
-word tracking as articles. For YouTube imports, each timestamp is a link that opens the video at
-that exact moment in a new tab. All text is normalized to simplified on import (`backend/normalize.py`).
+word tracking as articles. All text is normalized to simplified on import (`backend/normalize.py`).
 
 Parsing/fetching lives in `backend/subtitles.py`; lines are stored in the `subtitle_lines` table.
+
+## Importing books (EPUB / TXT)
+
+The Reading page's "Import a book" panel takes a `.epub` or `.txt` file
+(`POST /api/books/upload`):
+- A **.txt** becomes a single text.
+- An **.epub** is split into **one text per chapter** (each document item with enough Chinese,
+  titled `Book — Chapter`), so the reader stays responsive on long books. Parsed with `EbookLib`
+  + BeautifulSoup (`_parse_epub` in `backend/main.py`); covers/TOC/colophon are skipped.
+
+Everything is converted to Simplified on import and runs through the normal segmentation,
+status tracking, and seen-count pipeline.
 
 ## Learn next (what to study for the most benefit)
 

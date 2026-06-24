@@ -117,3 +117,85 @@ def fetch_youtube_subtitles(url: str):
     if not cues:
         raise ValueError("Found a caption track but could not parse any lines from it.")
     return title, clean_url, cues
+
+
+BILIBILI_RE = re.compile(r"bilibili\.com/video/(BV[0-9A-Za-z]+|av\d+)", re.IGNORECASE)
+
+
+def is_bilibili(url: str) -> bool:
+    return bool(BILIBILI_RE.search(url or "")) or "b23.tv" in (url or "")
+
+
+def _parse_json_subs(raw: str):
+    """Parse a JSON caption payload — Bilibili 'bcc' (body[{from,to,content}]) or
+    YouTube json3 (events[{tStartMs,dDurationMs,segs[{utf8}]}])."""
+    import json
+    data = json.loads(raw)
+    cues = []
+    if isinstance(data, dict) and data.get("body"):
+        for it in data["body"]:
+            text = (it.get("content") or "").strip()
+            if text:
+                cues.append({
+                    "start_ms": int(float(it.get("from", 0)) * 1000),
+                    "end_ms": int(float(it.get("to", 0)) * 1000),
+                    "text": text,
+                })
+    elif isinstance(data, dict) and data.get("events"):
+        for ev in data["events"]:
+            text = "".join(s.get("utf8", "") for s in (ev.get("segs") or [])).strip()
+            if text:
+                start = int(ev.get("tStartMs", 0))
+                cues.append({"start_ms": start, "end_ms": start + int(ev.get("dDurationMs", 0)), "text": text})
+    return cues
+
+
+def fetch_bilibili_subtitles(url: str):
+    """Extract Chinese captions from a Bilibili video via yt-dlp. Returns
+    (title, video_url, cues). Many Bilibili videos have no CC (or need a login),
+    in which case this raises ValueError with a clear message."""
+    import yt_dlp
+    import urllib.request
+
+    opts = {"skip_download": True, "quiet": True, "no_warnings": True}
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+
+    title = info.get("title", url)
+    webpage = info.get("webpage_url") or url
+    subs = info.get("subtitles") or {}
+    auto = info.get("automatic_captions") or {}
+
+    def pick(track_dict):
+        for lang in ("zh-Hans", "zh-CN", "zh", "ai-zh", "zh-Hant", "zh-TW"):
+            for key in track_dict:
+                if key == lang or key.startswith(lang):
+                    formats = {f.get("ext"): f.get("url") for f in track_dict[key]}
+                    for ext in ("vtt", "srt", "json3", "json"):
+                        if formats.get(ext):
+                            return formats[ext], ext
+        return None, None
+
+    sub_url, ext = pick(subs)
+    if not sub_url:
+        sub_url, ext = pick(auto)
+    if not sub_url:
+        raise ValueError("No Chinese captions found for this Bilibili video (many have none, or require a login).")
+
+    req = urllib.request.Request(
+        sub_url, headers={"User-Agent": "Mozilla/5.0", "Referer": "https://www.bilibili.com/"}
+    )
+    raw = urllib.request.urlopen(req, timeout=20).read().decode("utf-8", errors="replace")
+    cues = parse_subtitles(raw) if ext in ("vtt", "srt") else _parse_json_subs(raw)
+    if not cues:
+        raise ValueError("Found a caption track but could not parse any lines from it.")
+    return title, webpage, cues
+
+
+def fetch_video_subtitles(url: str):
+    """Route a video URL to the right caption fetcher (YouTube or Bilibili)."""
+    if normalize_youtube_url(url)[0]:
+        return fetch_youtube_subtitles(url)
+    if is_bilibili(url):
+        return fetch_bilibili_subtitles(url)
+    raise ValueError("Unsupported video URL — paste a YouTube or Bilibili link.")

@@ -21,6 +21,34 @@ SOURCES = [
         "extractor": "mandarinbean_spans",
         "difficulty_hint": "graded",
     },
+    {
+        "id": "dw_chinese",
+        "name": "DW 中文 (Deutsche Welle)",
+        "feed_url": "https://rss.dw.com/rdf/rss-chi-all",
+        "extractor": "fetch_full_page",
+        "difficulty_hint": "native",
+    },
+    {
+        "id": "rfi_chinese",
+        "name": "RFI 中文 (Radio France Int'l)",
+        "feed_url": "https://www.rfi.fr/cn/rss",
+        "extractor": "fetch_full_page",
+        "difficulty_hint": "native",
+    },
+    {
+        "id": "rfa_mandarin",
+        "name": "RFA 普通话 (Radio Free Asia)",
+        "feed_url": "https://www.rfa.org/mandarin/rss2.xml",
+        "extractor": "fetch_full_page",
+        "difficulty_hint": "native",
+    },
+    {
+        "id": "cna_taiwan",
+        "name": "中央社 CNA (Taiwan)",
+        "feed_url": "https://feeds.feedburner.com/rsscna/intworld",
+        "extractor": "fetch_full_page",
+        "difficulty_hint": "native",
+    },
 ]
 
 

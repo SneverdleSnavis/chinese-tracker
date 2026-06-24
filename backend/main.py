@@ -494,14 +494,91 @@ async def upload_subtitle(file: UploadFile = File(...), title: str = Form(None))
     return {"id": text_id, "lines": len(cues)}
 
 
+def _chinese_count(text: str) -> int:
+    return sum(1 for ch in text if "一" <= ch <= "鿿")
+
+
+def _parse_epub(raw: bytes, fallback_title: str):
+    """Return [(chapter_title, text)] for an EPUB — one entry per document item
+    that holds a meaningful amount of Chinese text (skips covers/TOC/colophon)."""
+    import ebooklib
+    from ebooklib import epub
+    from bs4 import BeautifulSoup
+    import tempfile, os
+
+    with tempfile.NamedTemporaryFile(suffix=".epub", delete=False) as tf:
+        tf.write(raw)
+        path = tf.name
+    try:
+        book = epub.read_epub(path)
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+    meta = book.get_metadata("DC", "title")
+    book_title = (meta[0][0] if meta else "") or fallback_title
+    chapters = []
+    idx = 0
+    for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
+        soup = BeautifulSoup(item.get_content(), "lxml")
+        text = soup.get_text("\n").strip()
+        if _chinese_count(text) < 100:
+            continue
+        idx += 1
+        heading = soup.find(["h1", "h2", "h3"])
+        ch_title = heading.get_text().strip() if heading and heading.get_text().strip() else f"Chapter {idx}"
+        chapters.append((f"{book_title} — {ch_title}", text))
+    return chapters
+
+
+@app.post("/api/books/upload")
+async def upload_book(file: UploadFile = File(...), title: str = Form(None)):
+    """Import a book as reader text(s). A .txt becomes one text; an .epub is split
+    into one text per chapter so the reader stays responsive."""
+    raw = await file.read()
+    name = file.filename or "book"
+    base_title = (title or name.rsplit(".", 1)[0]).strip()
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+
+    if ext == "txt":
+        chapters = [(base_title, raw.decode("utf-8", errors="replace"))]
+    elif ext == "epub":
+        try:
+            chapters = _parse_epub(raw, base_title)
+        except Exception as e:
+            raise HTTPException(400, f"Couldn't read that EPUB: {e}")
+    else:
+        raise HTTPException(400, "Upload a .epub or .txt file.")
+
+    created = []
+    with db() as conn:
+        for ch_title, content in chapters:
+            content = to_simplified(content).strip()
+            if _chinese_count(content) < 20:
+                continue
+            cur = conn.execute(
+                "INSERT INTO texts (title, source, content, created_at) VALUES (?, ?, ?, ?)",
+                (to_simplified(ch_title), name, content, now()),
+            )
+            _record_text_occurrences(conn, cur.lastrowid, content)
+            created.append({"id": cur.lastrowid, "title": to_simplified(ch_title)})
+    if not created:
+        raise HTTPException(400, "No Chinese text found in that file.")
+    return {"count": len(created), "texts": created}
+
+
 class YoutubeImport(BaseModel):
     url: str
 
 
-@app.post("/api/subtitles/youtube")
-def import_youtube(body: YoutubeImport):
+@app.post("/api/subtitles/video")
+@app.post("/api/subtitles/youtube")  # backward-compatible alias
+def import_video(body: YoutubeImport):
+    """Import Chinese captions from a YouTube or Bilibili video."""
     try:
-        title, video_url, cues = subtitles.fetch_youtube_subtitles(body.url)
+        title, video_url, cues = subtitles.fetch_video_subtitles(body.url)
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:
