@@ -141,17 +141,35 @@ def set_word_status(body: WordStatusUpdate):
         raise HTTPException(400, "invalid status")
     ts = now()
     with db() as conn:
-        existing = conn.execute("SELECT word FROM words WHERE word = ?", (body.word,)).fetchone()
+        existing = conn.execute(
+            "SELECT word, pinyin, definition FROM words WHERE word = ?", (body.word,)
+        ).fetchone()
         if existing:
-            conn.execute(
-                "UPDATE words SET status = ?, status_updated = ? WHERE word = ?",
-                (body.status, ts, body.word),
-            )
+            # Backfill pinyin/definition if the row is missing them (e.g. it was
+            # created by an earlier status-only mark), so the Words tab and any
+            # Anki sync have the data.
+            if not (existing["pinyin"] and existing["definition"]):
+                py, defn, _ = _effective_entry(conn, body.word)
+                conn.execute(
+                    "UPDATE words SET status = ?, status_updated = ?, "
+                    "pinyin = CASE WHEN pinyin IS NULL OR pinyin = '' THEN ? ELSE pinyin END, "
+                    "definition = CASE WHEN definition IS NULL OR definition = '' THEN ? ELSE definition END "
+                    "WHERE word = ?",
+                    (body.status, ts, py, defn, body.word),
+                )
+            else:
+                conn.execute(
+                    "UPDATE words SET status = ?, status_updated = ? WHERE word = ?",
+                    (body.status, ts, body.word),
+                )
         else:
+            # New word: fetch pinyin/definition from the dictionary (or a custom
+            # override) up front so it's never stored blank.
+            py, defn, _ = _effective_entry(conn, body.word)
             conn.execute(
-                "INSERT INTO words (word, status, seen_count, first_seen, last_seen, status_updated) "
-                "VALUES (?, ?, 0, ?, ?, ?)",
-                (body.word, body.status, ts, ts, ts),
+                "INSERT INTO words (word, status, pinyin, definition, seen_count, first_seen, last_seen, status_updated) "
+                "VALUES (?, ?, ?, ?, 0, ?, ?, ?)",
+                (body.word, body.status, py, defn, ts, ts, ts),
             )
     return {"ok": True}
 
@@ -315,6 +333,28 @@ def _record_text_occurrences(conn, text_id: int, content: str):
                 "VALUES (?, 'unknown', ?, ?, ?, ?, ?)",
                 (word, pinyin, definition, count, ts, ts),
             )
+
+
+def backfill_word_entries(conn):
+    """Fill in pinyin/definition for any word row that's missing them but has a
+    dictionary (or custom) entry available. Fixes words that were created by a
+    status-only mark before that data was fetched. Returns the count updated."""
+    rows = conn.execute(
+        "SELECT word FROM words WHERE pinyin IS NULL OR pinyin = '' OR definition IS NULL OR definition = ''"
+    ).fetchall()
+    updated = 0
+    for r in rows:
+        py, defn, _ = _effective_entry(conn, r["word"])
+        if py or defn:
+            conn.execute(
+                "UPDATE words SET "
+                "pinyin = CASE WHEN pinyin IS NULL OR pinyin = '' THEN ? ELSE pinyin END, "
+                "definition = CASE WHEN definition IS NULL OR definition = '' THEN ? ELSE definition END "
+                "WHERE word = ?",
+                (py, defn, r["word"]),
+            )
+            updated += 1
+    return updated
 
 
 def rebuild_seen_counts(conn):

@@ -6,6 +6,18 @@
       "runtimeExecutable": "venv\\Scripts\\python.exe",
       "runtimeArgs": ["-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", "8000", "--app-dir", "backend"],
       "port": 8000
+    },
+    {
+      "name": "life-dashboard",
+      "runtimeExecutable": "cmd.exe",
+      "runtimeArgs": ["/c", "C:\\Users\\ArloB\\Projects\\life-dashboard\\dev.cmd"],
+      "port": 3000
+    },
+    {
+      "name": "design-styleguide",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "8770", "--directory", "C:\\Users\\ArloB\\Projects\\MusicDatabase\\design"],
+      "port": 8770
     }
   ]
 }
