@@ -1273,7 +1273,7 @@ class AnkiImport(BaseModel):
 def anki_import_known(body: AnkiImport):
     if not anki.is_available():
         raise HTTPException(503, "AnkiConnect not reachable. Is Anki running with the AnkiConnect add-on?")
-    words = anki.get_all_known_words(body.deck_name)
+    words = anki.get_known_words(body.deck_name, min_interval=MATURE_INTERVAL_DAYS)
     ts = now()
     imported = 0
     with db() as conn:

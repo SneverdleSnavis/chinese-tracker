@@ -49,12 +49,16 @@
       <div class="actions" style="display:flex; gap:0.5rem;">
         <button id="anki-sync">Sync to Anki</button>
         <button id="anki-refresh" class="secondary">Refresh existing cards</button>
-        <button id="import-known" class="secondary">Import known words from this deck</button>
+        <button id="import-known" class="secondary" title="Marks a word 'known' only if its card in this deck has matured (interval ≥ 21 days). New and still-learning cards are skipped.">Import known words from this deck</button>
       </div>
       <p style="color: var(--muted); font-size:0.8rem; margin:0.6rem 0 0;">
         Sync pushes new "learning" words as cards (skipping ones already there),
         promotes any cards you've matured in Anki to "known", and tells Anki to
         sync with AnkiWeb so they reach your phone.
+      </p>
+      <p style="color: var(--muted); font-size:0.8rem; margin:0.4rem 0 0;">
+        Import only marks a word "known" once its card in the deck has matured
+        (spacing interval ≥ 21 days) — new and still-learning cards are skipped.
       </p>
       <div id="anki-result" style="margin-top:0.5rem; color: var(--muted); font-size: 0.85rem;"></div>
     </div>
@@ -124,7 +128,7 @@ document.getElementById("import-known").addEventListener("click", async () => {
       method: "POST",
       body: JSON.stringify({ deck_name: deck }),
     });
-    resultEl.textContent = `Imported ${res.imported} words as known.`;
+    resultEl.textContent = `Imported ${res.imported} matured word(s) as known.`;
     loadStats();
   } catch (e) {
     resultEl.textContent = "Error: " + e.message;

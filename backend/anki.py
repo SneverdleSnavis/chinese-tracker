@@ -70,18 +70,35 @@ def _build_back(pinyin: str, definition: str, example: str | None, audio: str | 
     return back
 
 
-def get_all_known_words(deck_name: str | None = None):
-    """Pulls hanzi text from all notes (optionally in one deck) to seed
-    known-word status from an existing Anki collection."""
+def get_known_words(deck_name: str | None = None, min_interval: int = 21):
+    """Pull hanzi for cards the user has genuinely learned, to seed known-word
+    status from an existing Anki collection.
+
+    A card counts as "known" only if it's a review card (i.e. it has graduated
+    out of the new/learning queues) whose spacing `interval` has reached
+    `min_interval` days. New and still-in-learning cards are skipped, so importing
+    doesn't blanket-mark every word in the deck as known.
+
+    We iterate cards, not notes, because maturity is a per-card property; a note
+    with several cards is known once any of its cards has matured. Returns a
+    de-duplicated list of hanzi.
+    """
     query = f'deck:"{deck_name}"' if deck_name else "deck:*"
-    note_ids = _invoke("findNotes", query=query)
-    if not note_ids:
+    card_ids = _invoke("findCards", query=query)
+    if not card_ids:
         return []
-    notes_info = _invoke("notesInfo", notes=note_ids)
+    cards = _invoke("cardsInfo", cards=card_ids)
+    seen = set()
     words = []
-    for note in notes_info:
-        value = _note_hanzi(note.get("fields", {}))
-        if value:
+    for c in cards:
+        # AnkiConnect card `type`: 0=new, 1=learning, 2=review, 3=relearning.
+        # Only review cards carry a meaningful day-based interval; for the others
+        # `interval` is 0 or a sub-day (seconds) value we don't want to compare.
+        if c.get("type") != 2 or c.get("interval", 0) < min_interval:
+            continue
+        value = _note_hanzi(c.get("fields", {}))
+        if value and value not in seen:
+            seen.add(value)
             words.append(value)
     return words
 
