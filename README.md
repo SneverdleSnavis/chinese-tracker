@@ -81,11 +81,46 @@ Then open **http://localhost:8000**. Your data (words, texts, progress) is store
 Windows: double-click `start_server.bat`. Otherwise: activate the env
 (`venv\Scripts\activate` / `source venv/bin/activate`) and run the `uvicorn` command above.
 
+## Updating & backing up your data
+
+**All your progress lives in one file: `backend/data/app.db`** (a SQLite
+database). It holds everything — word statuses, custom definitions, imported
+texts/subtitles/books, seen counts, lookup history, goals, and HSK progress. It's
+created automatically on first run and **never leaves your machine** — it's listed
+in `.gitignore`, so it is never committed or uploaded to GitHub.
+
+### Updating to a newer version
+
+From inside your existing project folder, just pull the latest code:
+
+```
+git pull
+pip install -r requirements.txt   # in case dependencies changed (activate the venv first)
+```
+
+Your `app.db` is untouched by `git pull`, so **all progress is preserved.** This is
+the recommended way to update.
+
+> ⚠️ **Don't update by deleting the folder and re-cloning.** A fresh clone does
+> *not* include `app.db` (it was never on GitHub), so you'd start from an empty
+> tracker. If you must re-clone into a new folder, first copy
+> `backend/data/app.db` out of the old folder and into the same path in the new
+> one **before** running it.
+
+### Backing up / moving to another computer
+
+`backend/data/app.db` *is* your backup — copy it somewhere safe periodically. To
+move your progress to a different machine, set the app up there (see *Getting
+started*), then drop your copied `app.db` into `backend/data/` before launching.
+Copy it while the server is stopped so the write-ahead log is flushed.
+
 ## Anki sync
 
 Requires Anki desktop running with the [AnkiConnect](https://ankiweb.net/shared/info/2055492159)
 add-on installed. The dashboard's Anki Sync panel lets you:
-- **Import known words**: pull existing notes from a deck and mark those words "known" here.
+- **Import known words**: pull words from a deck and mark them "known" here — but only
+  the ones whose card has matured (spacing interval ≥ `MATURE_INTERVAL_DAYS`, 21 days).
+  New and still-learning cards are skipped, so importing doesn't blanket-mark the deck.
 - **Sync to Anki** (one button) does three things:
   1. **Pushes new "learning" words** as cards. Each card's back gets the pinyin
      (diacritic tones, e.g. `nǐ hǎo`), definition, and — if enabled — an
