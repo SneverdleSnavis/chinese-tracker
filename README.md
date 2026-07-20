@@ -4,25 +4,82 @@ Local-first Mandarin study tool: word-status tracking (unknown/learning/known),
 a reader with click-to-lookup (jieba segmentation + CC-CEDICT), an analytics
 dashboard, and two-way Anki sync via AnkiConnect.
 
-## Setup
+## Getting started (setting up on a new computer)
+
+These steps get the tracker running from scratch. Windows is the main path (with
+macOS/Linux notes inline). You only do steps 1–4 once; after that, launching is one command.
+
+### 0. Install prerequisites
+
+- **Python 3.10 or newer.** Get it from [python.org](https://www.python.org/downloads/).
+  On the Windows installer, tick **"Add Python to PATH"**.
+  - On Windows the reliable command is the launcher **`py`** (plain `python` may open the
+    Microsoft Store instead — if it does, use `py` everywhere below). Check with `py --version`.
+  - On macOS/Linux use `python3` in place of `py`.
+- **Git**, to clone the repo — [git-scm.com](https://git-scm.com/downloads).
+- **(Optional) Anki desktop** — only needed for the Anki sync features. See the *Anki sync*
+  section further down.
+
+### 1. Clone the repo
 
 ```
-python -m venv venv
+git clone https://github.com/SneverdleSnavis/chinese-tracker.git
+cd chinese-tracker
+```
+
+### 2. Create a virtual environment and install dependencies
+
+The env **must** be named `venv` (the `start_server.bat` launcher expects that folder).
+
+Windows (PowerShell or Command Prompt):
+
+```
+py -m venv venv
 venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-CC-CEDICT is already downloaded to `backend/data/cedict.txt`. If missing, fetch it from
-https://www.mdbg.net/chinese/dictionary?page=cc-cedict and extract to that path.
-
-## Run
+macOS/Linux:
 
 ```
-venv\Scripts\activate
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+> If Windows PowerShell blocks `activate` with a script-execution error, run once:
+> `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`, then try again.
+
+### 3. Download the CC-CEDICT dictionary (required — not included in the repo)
+
+The dictionary file is too large / license-tracked, so it isn't committed. Without it,
+word lookups won't work. Get it once:
+
+1. Go to https://www.mdbg.net/chinese/dictionary?page=cc-cedict
+2. Download the **CC-CEDICT** file in **UTF-8** format (`cedict_1_0_ts_utf-8_mdbg.txt.gz`).
+3. Unzip it, rename the extracted text file to **`cedict.txt`**, and put it at:
+   **`backend/data/cedict.txt`**
+
+The HSK 3.0 word list (`backend/data/hsk30.txt`) *is* included, so nothing to do there.
+
+### 4. Run it
+
+Windows — easiest: double-click **`start_server.bat`** (it activates the env, starts the
+server, and opens your browser).
+
+Or from a terminal, with the env activated (step 2):
+
+```
 uvicorn main:app --app-dir backend --port 8000
 ```
 
-Open http://localhost:8000
+Then open **http://localhost:8000**. Your data (words, texts, progress) is stored locally in
+`backend/data/app.db`, which is created automatically on first run and stays on your machine.
+
+### Every time after that
+
+Windows: double-click `start_server.bat`. Otherwise: activate the env
+(`venv\Scripts\activate` / `source venv/bin/activate`) and run the `uvicorn` command above.
 
 ## Anki sync
 
